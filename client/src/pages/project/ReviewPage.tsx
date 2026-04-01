@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 interface Props {
   projectId: number;
   project: Project;
+  docId?: string;
 }
 
 type SchemaField = {
@@ -135,8 +136,9 @@ function DynamicField({
   );
 }
 
-export default function ReviewPage({ projectId, project }: Props) {
-  const { docId } = useParams<{ docId: string }>();
+export default function ReviewPage({ projectId, project, docId: docIdProp }: Props) {
+  const { docId: docIdParam } = useParams<{ docId: string }>();
+  const docId = docIdProp ?? docIdParam;
   const [, navigate] = useLocation();
   const [statusFilter, setStatusFilter] = useState<string>("needs_review");
   const [editedFields, setEditedFields] = useState<Record<string, unknown>>({});

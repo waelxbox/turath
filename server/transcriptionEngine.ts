@@ -7,7 +7,23 @@
  */
 
 import { invokeLLM } from "./_core/llm";
+import { invokeGemini, isGeminiModel } from "./geminiClient";
 import type { Project } from "../drizzle/schema";
+import { ENV } from "./_core/env";
+
+/**
+ * Route LLM call: use direct Gemini API when GOOGLE_AI_API_KEY is set and model is Gemini,
+ * otherwise fall back to the Manus Forge proxy.
+ */
+async function callLLM(
+  params: Parameters<typeof invokeLLM>[0],
+  modelName: string
+): Promise<ReturnType<typeof invokeLLM>> {
+  if (ENV.googleAiApiKey && isGeminiModel(modelName)) {
+    return invokeGemini({ ...params, model: modelName });
+  }
+  return invokeLLM(params);
+}
 
 export interface TranscriptionResult {
   rawJson: Record<string, unknown>;
@@ -95,10 +111,13 @@ async function runSinglePass(
     },
   ];
 
-  const response = await invokeLLM({
-    messages,
-    ...(schema ? { response_format: buildJsonSchema(schema) } : {}),
-  });
+  const response = await callLLM(
+    {
+      messages,
+      ...(schema ? { response_format: buildJsonSchema(schema) } : {}),
+    },
+    project.modelName
+  );
 
   const rawContent = response.choices[0]?.message?.content ?? "{}";
   const raw = typeof rawContent === "string" ? rawContent : "{}";
@@ -126,7 +145,7 @@ Output ONLY valid JSON.`;
   const schema = project.jsonSchema as Record<string, SchemaField> | null;
 
   // Pass 1: Vision → verbatim text
-  const pass1Response = await invokeLLM({
+  const pass1Response = await callLLM({
     messages: [
       { role: "system", content: pass1Prompt },
       {
@@ -140,19 +159,19 @@ Output ONLY valid JSON.`;
         ],
       },
     ],
-  });
+  }, project.modelName);
 
   const pass1Content = pass1Response.choices[0]?.message?.content ?? "";
   const originalText = typeof pass1Content === "string" ? pass1Content : "";
 
   // Pass 2: Text → translation + JSON
-  const pass2Response = await invokeLLM({
+  const pass2Response = await callLLM({
     messages: [
       { role: "system", content: pass2Prompt },
       { role: "user", content: `Transcription to process:\n\n${originalText}` },
     ],
     ...(schema ? { response_format: buildJsonSchema(schema) } : {}),
-  });
+  }, project.modelName);
 
   const pass2Content = pass2Response.choices[0]?.message?.content ?? "{}";
   const raw2 = typeof pass2Content === "string" ? pass2Content : "{}";

@@ -21,8 +21,7 @@ interface SampleEntry {
   imageBase64: string;
   mimeType: string;
   previewUrl: string;
-  transcription: string; // JSON string
-  transcriptionParsed: Record<string, unknown> | null;
+  transcriptionText: string; // plain text — converted to JSON internally
   isHeldOut: boolean;
   uploaded: boolean;
 }
@@ -102,8 +101,7 @@ export default function Onboarding() {
         imageBase64: base64,
         mimeType: file.type,
         previewUrl: preview,
-        transcription: "{}",
-        transcriptionParsed: null,
+        transcriptionText: "",
         isHeldOut: false,
         uploaded: false,
       });
@@ -112,12 +110,14 @@ export default function Onboarding() {
   }, []);
 
   const updateTranscription = (id: string, value: string) => {
-    setSamples(prev => prev.map(s => {
-      if (s.id !== id) return s;
-      let parsed: Record<string, unknown> | null = null;
-      try { parsed = JSON.parse(value); } catch { /* invalid JSON, that's ok */ }
-      return { ...s, transcription: value, transcriptionParsed: parsed };
-    }));
+    setSamples(prev => prev.map(s => s.id !== id ? s : { ...s, transcriptionText: value }));
+  };
+
+  /** Convert plain text to a JSON object the server accepts */
+  const textToJson = (text: string): Record<string, unknown> => {
+    // Try to parse as JSON first (power users can still paste JSON)
+    try { return JSON.parse(text); } catch { /* not JSON, wrap as plain text */ }
+    return { transcription_text: text };
   };
 
   const toggleHeldOut = (id: string) => {
@@ -134,9 +134,9 @@ export default function Onboarding() {
   };
 
   const handleGenerate = async () => {
-    const valid = samples.filter(s => s.transcriptionParsed !== null);
+    const valid = samples.filter(s => s.transcriptionText.trim().length > 0);
     if (valid.length < 1) {
-      toast.error("Add at least 1 sample with valid JSON transcription");
+      toast.error("Add at least 1 sample with a transcription");
       return;
     }
 
@@ -146,13 +146,13 @@ export default function Onboarding() {
       // Upload all samples first
       for (const sample of samples) {
         if (sample.uploaded) continue;
-        if (!sample.transcriptionParsed) continue;
+        if (!sample.transcriptionText.trim()) continue;
         await uploadSample.mutateAsync({
           projectId,
           filename: sample.filename,
           imageBase64: sample.imageBase64,
           mimeType: sample.mimeType,
-          manualTranscription: sample.transcriptionParsed,
+          manualTranscription: textToJson(sample.transcriptionText),
           isHeldOut: sample.isHeldOut,
         });
         setSamples(prev => prev.map(s => s.id === sample.id ? { ...s, uploaded: true } : s));
@@ -300,22 +300,17 @@ export default function Onboarding() {
                       {/* Transcription input */}
                       <div className="p-4">
                         <Label className="text-xs text-muted-foreground mb-2 block">
-                          Manual transcription (JSON)
+                          Your ideal transcription
                         </Label>
                         <Textarea
-                          value={sample.transcription}
+                          value={sample.transcriptionText}
                           onChange={e => updateTranscription(sample.id, e.target.value)}
-                          placeholder='{"title": "...", "date": "...", "content": "..."}'
-                          className="font-mono text-xs bg-background resize-none h-36"
+                          placeholder="Type or paste the ideal transcription of this document exactly as you want it to appear — any language, any format. The AI will learn your style from this."
+                          className="text-xs bg-background resize-none h-36 leading-relaxed"
                         />
-                        {sample.transcription !== "{}" && sample.transcriptionParsed === null && (
-                          <p className="text-xs text-destructive mt-1 flex items-center gap-1">
-                            <XCircle className="w-3 h-3" /> Invalid JSON
-                          </p>
-                        )}
-                        {sample.transcriptionParsed !== null && (
+                        {sample.transcriptionText.trim().length > 0 && (
                           <p className="text-xs text-green-400 mt-1 flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" /> Valid JSON — {Object.keys(sample.transcriptionParsed).length} fields
+                            <CheckCircle2 className="w-3 h-3" /> Ready
                           </p>
                         )}
                       </div>
@@ -327,11 +322,11 @@ export default function Onboarding() {
 
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">
-                {samples.filter(s => s.transcriptionParsed !== null).length} / {samples.length} samples ready
+                {samples.filter(s => s.transcriptionText.trim().length > 0).length} / {samples.length} samples ready
               </p>
               <Button
                 onClick={handleGenerate}
-                disabled={samples.filter(s => s.transcriptionParsed !== null).length < 1}
+                disabled={samples.filter(s => s.transcriptionText.trim().length > 0).length < 1}
                 className="gap-2"
               >
                 <Wand2 className="w-4 h-4" />

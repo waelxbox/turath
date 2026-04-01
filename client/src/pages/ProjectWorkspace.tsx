@@ -9,6 +9,7 @@ import ReviewPage from "./project/ReviewPage";
 import ExportPage from "./project/ExportPage";
 import ProjectSettings from "./project/ProjectSettings";
 import ProjectOverview from "./project/ProjectOverview";
+import { useRoute } from "wouter";
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: BookOpen, path: "" },
@@ -17,6 +18,32 @@ const NAV_ITEMS = [
   { id: "export", label: "Export", icon: Download, path: "/export" },
   { id: "settings", label: "Settings", icon: Settings, path: "/settings" },
 ];
+
+/** Separate component so useRoute hooks work correctly with wouter's context */
+function WorkspaceRoutes({
+  basePath,
+  projectId,
+  project,
+  stats,
+}: {
+  basePath: string;
+  projectId: number;
+  project: import("../../../drizzle/schema").Project;
+  stats: { total: number; reviewed: number; flagged: number; needsReview: number; processing: number; pending: number; errors: number } | null | undefined;
+}) {
+  const [matchReviewDoc, paramsReviewDoc] = useRoute(`${basePath}/review/:docId`);
+  const [matchReview] = useRoute(`${basePath}/review`);
+  const [matchUpload] = useRoute(`${basePath}/upload`);
+  const [matchExport] = useRoute(`${basePath}/export`);
+  const [matchSettings] = useRoute(`${basePath}/settings`);
+
+  if (matchUpload) return <UploadPage projectId={projectId} project={project} />;
+  if (matchExport) return <ExportPage projectId={projectId} project={project} />;
+  if (matchSettings) return <ProjectSettings projectId={projectId} project={project} />;
+  if (matchReviewDoc) return <ReviewPage projectId={projectId} project={project} docId={paramsReviewDoc?.docId} />;
+  if (matchReview) return <ReviewPage projectId={projectId} project={project} />;
+  return <ProjectOverview projectId={projectId} project={project} stats={stats} />;
+}
 
 export default function ProjectWorkspace() {
   const { id } = useParams<{ id: string }>();
@@ -134,14 +161,7 @@ export default function ProjectWorkspace() {
 
         {/* Main content */}
         <main className="flex-1 overflow-auto">
-          <Switch>
-            <Route path={`${basePath}/upload`} component={() => <UploadPage projectId={projectId} project={project} />} />
-            <Route path={`${basePath}/review/:docId`} component={() => <ReviewPage projectId={projectId} project={project} />} />
-            <Route path={`${basePath}/review`} component={() => <ReviewPage projectId={projectId} project={project} />} />
-            <Route path={`${basePath}/export`} component={() => <ExportPage projectId={projectId} project={project} />} />
-            <Route path={`${basePath}/settings`} component={() => <ProjectSettings projectId={projectId} project={project} />} />
-            <Route component={() => <ProjectOverview projectId={projectId} project={project} stats={stats} />} />
-          </Switch>
+          <WorkspaceRoutes basePath={basePath} projectId={projectId} project={project} stats={stats} />
         </main>
       </div>
     </div>

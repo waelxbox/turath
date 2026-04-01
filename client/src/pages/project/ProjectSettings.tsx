@@ -127,11 +127,25 @@ export default function ProjectSettings({ projectId, project }: Props) {
                 <SelectTrigger className="bg-background mt-1.5">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-h-80">
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Gemini 3 (Preview)</div>
+                  <SelectItem value="gemini-3.1-pro-preview-03-25">gemini-3.1-pro-preview-03-25 ✦</SelectItem>
+                  <SelectItem value="gemini-3.1-flash-preview-03-25">gemini-3.1-flash-preview-03-25</SelectItem>
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Gemini 2.5</div>
+                  <SelectItem value="gemini-2.5-pro">gemini-2.5-pro (stable)</SelectItem>
+                  <SelectItem value="gemini-2.5-pro-preview-06-05">gemini-2.5-pro-preview-06-05</SelectItem>
+                  <SelectItem value="gemini-2.5-flash">gemini-2.5-flash</SelectItem>
+                  <SelectItem value="gemini-2.5-flash-preview-04-17">gemini-2.5-flash-preview-04-17</SelectItem>
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Gemini 2.0</div>
                   <SelectItem value="gemini-2.0-flash">gemini-2.0-flash</SelectItem>
+                  <SelectItem value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</SelectItem>
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Gemini 1.5</div>
                   <SelectItem value="gemini-1.5-pro">gemini-1.5-pro</SelectItem>
+                  <SelectItem value="gemini-1.5-flash">gemini-1.5-flash</SelectItem>
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">OpenAI (via Forge)</div>
                   <SelectItem value="gpt-4o">gpt-4o</SelectItem>
                   <SelectItem value="gpt-4o-mini">gpt-4o-mini</SelectItem>
+                  <SelectItem value="o4-mini">o4-mini</SelectItem>
                 </SelectContent>
               </Select>
             </div>

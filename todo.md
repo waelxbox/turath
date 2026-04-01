@@ -72,3 +72,10 @@
 - [ ] Real-time batch processing progress via WebSocket
 - [ ] Document page/folio management (multi-page documents)
 - [ ] Confidence score display per transcription field
+
+## Bug Fixes & Improvements (Round 2)
+- [x] Add GOOGLE_AI_API_KEY secret and wire transcription engine to use it directly
+- [x] Expand model dropdown: Gemini 3.1 Pro Preview, Gemini 2.5 Pro (stable + preview), Gemini 2.5 Flash, Gemini 2.0 Flash, Gemini 1.5 Pro/Flash, GPT-4o, GPT-4o-mini, o4-mini
+- [x] Onboarding: replace JSON editor with plain text textarea (auto-convert to JSON internally)
+- [x] Fix review page 404 — docId param not passed through nested wouter route (fixed with useRoute)
+- [x] Fix review page empty results — transcription data loading now correctly tied to resolved docId
