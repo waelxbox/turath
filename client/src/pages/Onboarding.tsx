@@ -87,6 +87,21 @@ export default function Onboarding() {
   const validate = trpc.onboarding.validate.useMutation();
   const refine = trpc.onboarding.refine.useMutation();
   const activate = trpc.onboarding.activate.useMutation();
+  const updateProject = trpc.projects.update.useMutation();
+  const [isSkipping, setIsSkipping] = useState(false);
+
+  const handleSkip = async () => {
+    if (!projectId) return;
+    setIsSkipping(true);
+    try {
+      await updateProject.mutateAsync({ id: projectId, status: "active" });
+      toast.success("Project activated — configure your settings manually");
+      navigate(`/projects/${projectId}/settings`);
+    } catch {
+      toast.error("Failed to activate project");
+      setIsSkipping(false);
+    }
+  };
 
   const handleFileAdd = useCallback(async (files: FileList | null) => {
     if (!files) return;
@@ -320,10 +335,22 @@ export default function Onboarding() {
               </div>
             )}
 
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">
-                {samples.filter(s => s.transcriptionText.trim().length > 0).length} / {samples.length} samples ready
-              </p>
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <p className="text-xs text-muted-foreground">
+                  {samples.filter(s => s.transcriptionText.trim().length > 0).length} / {samples.length} samples ready
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSkip}
+                  disabled={isSkipping}
+                  className="text-xs text-muted-foreground hover:text-foreground gap-1.5"
+                >
+                  {isSkipping ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  Skip — configure manually
+                </Button>
+              </div>
               <Button
                 onClick={handleGenerate}
                 disabled={samples.filter(s => s.transcriptionText.trim().length > 0).length < 1}

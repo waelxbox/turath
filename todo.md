@@ -79,3 +79,8 @@
 - [x] Onboarding: replace JSON editor with plain text textarea (auto-convert to JSON internally)
 - [x] Fix review page 404 — docId param not passed through nested wouter route (fixed with useRoute)
 - [x] Fix review page empty results — transcription data loading now correctly tied to resolved docId
+
+## Bug Fixes & Improvements (Round 3)
+- [x] Fix review page: transcription metadata not loading/displaying
+- [x] Fix review page: verify document list, transcription fetch, and dynamic field rendering end-to-end
+- [x] Add skip-onboarding button: marks project active, navigates to Settings

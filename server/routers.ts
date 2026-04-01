@@ -315,6 +315,19 @@ const documentsRouter = router({
       return getDocumentsByProjectId(input.projectId, input.status);
     }),
 
+  // Returns a fresh presigned URL for viewing a document image (stored URLs expire)
+  getImageUrl: protectedProcedure
+    .input(z.object({ documentId: z.number(), projectId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const doc = await getDocumentById(input.documentId, input.projectId);
+      if (!doc) throw new TRPCError({ code: "NOT_FOUND" });
+      const { storageGet } = await import("./storage");
+      const { url } = await storageGet(doc.storagePath);
+      return { url, filename: doc.filename, mimeType: doc.mimeType };
+    }),
+
   upload: protectedProcedure
     .input(z.object({
       projectId: z.number(),

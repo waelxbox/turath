@@ -7,11 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
   CheckCircle2, Flag, ChevronLeft, ChevronRight, Loader2,
-  Clock, AlertCircle, XCircle, Eye, Filter
+  Eye, Filter, Zap, AlertCircle, ImageOff
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -22,10 +21,12 @@ interface Props {
 }
 
 type SchemaField = {
-  type: "string" | "boolean" | "array" | "number";
+  type: "string" | "boolean" | "array" | "number" | "object";
   description?: string;
   nullable?: boolean;
   displayHint?: "short_text" | "long_text" | "tag_list";
+  properties?: Record<string, SchemaField>;
+  items?: { type: string };
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -45,49 +46,90 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+/**
+ * Flatten a potentially nested JSON schema into a flat list of renderable fields.
+ * Nested objects are expanded with dot-notation keys (e.g. "structure.name").
+ */
+function flattenSchema(
+  schema: Record<string, SchemaField>,
+  prefix = ""
+): Array<{ key: string; label: string; def: SchemaField }> {
+  const result: Array<{ key: string; label: string; def: SchemaField }> = [];
+  for (const [k, def] of Object.entries(schema)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    const label = key.replace(/_/g, " ").replace(/\./g, " › ");
+    if (def.type === "object" && def.properties) {
+      result.push(...flattenSchema(def.properties, key));
+    } else {
+      result.push({ key, label, def });
+    }
+  }
+  return result;
+}
+
+/** Get a value from a (possibly nested) object using dot-notation key */
+function getNestedValue(obj: Record<string, unknown>, key: string): unknown {
+  const parts = key.split(".");
+  let cur: unknown = obj;
+  for (const part of parts) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+/** Set a value in a (possibly nested) object using dot-notation key, returning a new object */
+function setNestedValue(obj: Record<string, unknown>, key: string, value: unknown): Record<string, unknown> {
+  const parts = key.split(".");
+  if (parts.length === 1) return { ...obj, [key]: value };
+  const [head, ...rest] = parts;
+  const nested = (obj[head] ?? {}) as Record<string, unknown>;
+  return { ...obj, [head]: setNestedValue(nested, rest.join("."), value) };
+}
+
 function DynamicField({
-  fieldName,
+  fieldKey,
+  label,
   fieldDef,
   value,
   onChange,
 }: {
-  fieldName: string;
+  fieldKey: string;
+  label: string;
   fieldDef: SchemaField;
   value: unknown;
   onChange: (v: unknown) => void;
 }) {
   if (fieldDef.type === "boolean") {
     return (
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between py-1">
         <div>
-          <Label className="text-sm">{fieldName}</Label>
+          <Label className="text-sm capitalize">{label}</Label>
           {fieldDef.description && <p className="text-xs text-muted-foreground">{fieldDef.description}</p>}
         </div>
-        <Switch
-          checked={Boolean(value)}
-          onCheckedChange={onChange}
-        />
+        <Switch checked={Boolean(value)} onCheckedChange={onChange} />
       </div>
     );
   }
 
   if (fieldDef.type === "array" || fieldDef.displayHint === "tag_list") {
-    const arr = Array.isArray(value) ? value : [];
+    const arr = Array.isArray(value) ? (value as unknown[]) : [];
     const [tagInput, setTagInput] = useState("");
     return (
       <div>
-        <Label className="text-sm mb-1.5 block">{fieldName}</Label>
+        <Label className="text-sm mb-1.5 block capitalize">{label}</Label>
         {fieldDef.description && <p className="text-xs text-muted-foreground mb-2">{fieldDef.description}</p>}
-        <div className="flex flex-wrap gap-1.5 mb-2">
+        <div className="flex flex-wrap gap-1.5 mb-2 min-h-[24px]">
           {arr.map((tag, i) => (
             <span
               key={i}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/15 text-primary text-xs cursor-pointer hover:bg-destructive/15 hover:text-destructive"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/15 text-primary text-xs cursor-pointer hover:bg-destructive/15 hover:text-destructive transition-colors"
               onClick={() => onChange(arr.filter((_, j) => j !== i))}
             >
               {String(tag)} ×
             </span>
           ))}
+          {arr.length === 0 && <span className="text-xs text-muted-foreground italic">No items</span>}
         </div>
         <div className="flex gap-2">
           <Input
@@ -108,13 +150,16 @@ function DynamicField({
     );
   }
 
-  if (fieldDef.displayHint === "long_text" || (typeof value === "string" && value.length > 100)) {
+  const strVal = String(value ?? "");
+  const isLong = fieldDef.displayHint === "long_text" || strVal.length > 120;
+
+  if (isLong) {
     return (
       <div>
-        <Label className="text-sm mb-1.5 block">{fieldName}</Label>
+        <Label className="text-sm mb-1.5 block capitalize">{label}</Label>
         {fieldDef.description && <p className="text-xs text-muted-foreground mb-2">{fieldDef.description}</p>}
         <Textarea
-          value={String(value ?? "")}
+          value={strVal}
           onChange={e => onChange(e.target.value)}
           className="bg-background text-sm resize-none"
           rows={4}
@@ -125,10 +170,10 @@ function DynamicField({
 
   return (
     <div>
-      <Label className="text-sm mb-1.5 block">{fieldName}</Label>
+      <Label className="text-sm mb-1.5 block capitalize">{label}</Label>
       {fieldDef.description && <p className="text-xs text-muted-foreground mb-2">{fieldDef.description}</p>}
       <Input
-        value={String(value ?? "")}
+        value={strVal}
         onChange={e => onChange(e.target.value)}
         className="bg-background text-sm"
       />
@@ -140,29 +185,57 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
   const { docId: docIdParam } = useParams<{ docId: string }>();
   const docId = docIdProp ?? docIdParam;
   const [, navigate] = useLocation();
-  const [statusFilter, setStatusFilter] = useState<string>("needs_review");
+  // Default to showing all statuses so users don't get confused by empty list
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [editedFields, setEditedFields] = useState<Record<string, unknown>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
 
   const { data: documents, refetch: refetchDocs } = trpc.documents.list.useQuery({
     projectId,
-    status: statusFilter as "needs_review" | "reviewed" | "flagged" | "pending" | "processing" | "error" | undefined,
+    status: statusFilter === "all"
+      ? undefined
+      : statusFilter as "needs_review" | "reviewed" | "flagged" | "pending" | "processing" | "error",
   });
 
   const currentDocId = docId ? parseInt(docId) : documents?.[0]?.id;
   const currentIndex = documents?.findIndex(d => d.id === currentDocId) ?? 0;
 
-  const { data: transcription, refetch: refetchTranscription } = trpc.transcriptions.getByDocument.useQuery(
+  const { data: transcription, refetch: refetchTranscription, isLoading: transcriptionLoading } =
+    trpc.transcriptions.getByDocument.useQuery(
+      { documentId: currentDocId ?? 0, projectId },
+      { enabled: !!currentDocId }
+    );
+
+  // Fresh presigned image URL (stored URLs expire)
+  const { data: imageData, isLoading: imageLoading } = trpc.documents.getImageUrl.useQuery(
     { documentId: currentDocId ?? 0, projectId },
-    { enabled: !!currentDocId }
+    { enabled: !!currentDocId, staleTime: 4 * 60 * 1000 } // re-fetch every 4 min
   );
+
+  const transcribeDoc = trpc.documents.transcribe.useMutation({
+    onSuccess: async (result) => {
+      if (result.success) {
+        toast.success("Transcription complete");
+        await refetchDocs();
+        await refetchTranscription();
+      } else {
+        toast.error(`Transcription failed: ${result.error}`);
+      }
+      setIsTranscribing(false);
+    },
+    onError: (err) => {
+      toast.error(err.message);
+      setIsTranscribing(false);
+    },
+  });
 
   const saveReview = trpc.transcriptions.saveReview.useMutation({
     onSuccess: () => {
       toast.success("Saved");
       refetchDocs();
       refetchTranscription();
-      // Auto-advance to next
+      // Auto-advance to next document
       if (documents && currentIndex < documents.length - 1) {
         const next = documents[currentIndex + 1];
         navigate(`/projects/${projectId}/review/${next.id}`);
@@ -172,6 +245,7 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
   });
 
   const schema = project.jsonSchema as Record<string, SchemaField> | null;
+  const flatFields = schema ? flattenSchema(schema) : null;
   const rawData = (transcription?.reviewedJson ?? transcription?.rawJson) as Record<string, unknown> | null;
 
   useEffect(() => {
@@ -193,6 +267,12 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
     setIsSaving(false);
   };
 
+  const handleTranscribe = async () => {
+    if (!currentDocId) return;
+    setIsTranscribing(true);
+    await transcribeDoc.mutateAsync({ documentId: currentDocId, projectId });
+  };
+
   const currentDoc = documents?.find(d => d.id === currentDocId);
 
   return (
@@ -206,9 +286,11 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="all">All documents</SelectItem>
               <SelectItem value="needs_review">Needs review</SelectItem>
               <SelectItem value="reviewed">Reviewed</SelectItem>
               <SelectItem value="flagged">Flagged</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
               <SelectItem value="error">Errors</SelectItem>
             </SelectContent>
           </Select>
@@ -216,7 +298,7 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
         <div className="flex-1 overflow-y-auto divide-y divide-border">
           {!documents || documents.length === 0 ? (
             <div className="p-4 text-center text-xs text-muted-foreground">
-              No documents with this status
+              No documents found
             </div>
           ) : (
             documents.map(doc => (
@@ -255,7 +337,8 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
                     variant="ghost" size="icon" className="h-7 w-7"
                     disabled={currentIndex <= 0}
                     onClick={() => {
-                      if (documents && currentIndex > 0) navigate(`/projects/${projectId}/review/${documents[currentIndex - 1].id}`);
+                      if (documents && currentIndex > 0)
+                        navigate(`/projects/${projectId}/review/${documents[currentIndex - 1].id}`);
                     }}
                   >
                     <ChevronLeft className="w-4 h-4" />
@@ -265,7 +348,8 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
                     variant="ghost" size="icon" className="h-7 w-7"
                     disabled={!documents || currentIndex >= documents.length - 1}
                     onClick={() => {
-                      if (documents && currentIndex < documents.length - 1) navigate(`/projects/${projectId}/review/${documents[currentIndex + 1].id}`);
+                      if (documents && currentIndex < documents.length - 1)
+                        navigate(`/projects/${projectId}/review/${documents[currentIndex + 1].id}`);
                     }}
                   >
                     <ChevronRight className="w-4 h-4" />
@@ -275,58 +359,108 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
                 <StatusBadge status={currentDoc.status} />
               </div>
               <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5 bg-transparent border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
-                  onClick={() => handleSave("flagged")}
-                  disabled={isSaving || !transcription}
-                >
-                  {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
-                  Flag
-                </Button>
-                <Button
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => handleSave("reviewed")}
-                  disabled={isSaving || !transcription}
-                >
-                  {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                  Mark reviewed
-                </Button>
+                {transcription && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 bg-transparent border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                      onClick={() => handleSave("flagged")}
+                      disabled={isSaving}
+                    >
+                      {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
+                      Flag
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => handleSave("reviewed")}
+                      disabled={isSaving}
+                    >
+                      {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                      Mark reviewed
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
 
             {/* Split view */}
             <div className="flex-1 overflow-hidden flex">
               {/* Image panel */}
-              <div className="w-1/2 border-r border-border overflow-auto p-4 bg-black/20">
-                {currentDoc.storageUrl ? (
+              <div className="w-1/2 border-r border-border overflow-auto p-4 bg-black/20 flex items-start justify-center">
+                {imageLoading ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                    <span className="text-xs">Loading image…</span>
+                  </div>
+                ) : imageData?.url ? (
                   <img
-                    src={currentDoc.storageUrl}
+                    src={imageData.url}
                     alt={currentDoc.filename}
-                    className="w-full rounded"
+                    className="w-full rounded shadow-lg"
                   />
                 ) : (
-                  <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                    Image not available
+                  <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
+                    <ImageOff className="w-8 h-8" />
+                    <span className="text-xs">Image not available</span>
                   </div>
                 )}
               </div>
 
-              {/* Form panel */}
+              {/* Form / transcription panel */}
               <div className="w-1/2 overflow-auto p-6">
-                {!transcription ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center">
-                      <Loader2 className="w-6 h-6 animate-spin text-primary mx-auto mb-2" />
-                      <p className="text-sm text-muted-foreground">Loading transcription…</p>
+                {/* Case 1: Document not yet transcribed */}
+                {!transcriptionLoading && !transcription && (
+                  <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
+                    <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                      <Zap className="w-6 h-6 text-primary" />
                     </div>
+                    <div>
+                      <p className="font-medium mb-1">Not yet transcribed</p>
+                      <p className="text-sm text-muted-foreground">
+                        Run the AI transcription engine on this document to extract its metadata.
+                      </p>
+                    </div>
+                    <Button onClick={handleTranscribe} disabled={isTranscribing} className="gap-2">
+                      {isTranscribing
+                        ? <><Loader2 className="w-4 h-4 animate-spin" /> Transcribing…</>
+                        : <><Zap className="w-4 h-4" /> Transcribe now</>
+                      }
+                    </Button>
                   </div>
-                ) : (
+                )}
+
+                {/* Case 2: Currently transcribing */}
+                {(transcriptionLoading || (isTranscribing && !transcription)) && (
+                  <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+                    <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                    <p className="text-sm">Loading transcription…</p>
+                  </div>
+                )}
+
+                {/* Case 3: Error state */}
+                {!transcriptionLoading && currentDoc.status === "error" && !transcription && (
+                  <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
+                    <AlertCircle className="w-8 h-8 text-destructive" />
+                    <p className="text-sm text-destructive">Transcription failed</p>
+                    {currentDoc.errorMessage && (
+                      <p className="text-xs text-muted-foreground font-mono bg-secondary rounded p-2 max-w-xs">
+                        {currentDoc.errorMessage}
+                      </p>
+                    )}
+                    <Button variant="outline" size="sm" onClick={handleTranscribe} disabled={isTranscribing} className="gap-2">
+                      {isTranscribing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                      Retry
+                    </Button>
+                  </div>
+                )}
+
+                {/* Case 4: Transcription loaded — show editable fields */}
+                {!transcriptionLoading && transcription && (
                   <div className="space-y-5">
                     {/* Model info */}
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground pb-3 border-b border-border">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground pb-3 border-b border-border flex-wrap">
                       <span>Model: <span className="font-mono">{transcription.modelUsed}</span></span>
                       {transcription.reviewedAt && (
                         <span>· Reviewed {new Date(transcription.reviewedAt).toLocaleDateString()}</span>
@@ -339,38 +473,77 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
                         <Label className="text-xs text-muted-foreground uppercase tracking-wide mb-2 block">
                           Original transcription (pass 1)
                         </Label>
-                        <div className="bg-background rounded-lg p-3 text-sm font-mono text-muted-foreground max-h-32 overflow-y-auto">
+                        <div className="bg-background rounded-lg p-3 text-sm font-mono text-muted-foreground max-h-32 overflow-y-auto whitespace-pre-wrap">
                           {transcription.originalText}
                         </div>
                       </div>
                     )}
 
-                    {/* Dynamic schema fields */}
-                    {schema ? (
-                      Object.entries(schema).map(([fieldName, fieldDef]) => (
+                    {/* Dynamic schema fields (flattened, including nested objects) */}
+                    {flatFields && flatFields.length > 0 ? (
+                      flatFields.map(({ key, label, def }) => (
                         <DynamicField
-                          key={fieldName}
-                          fieldName={fieldName}
-                          fieldDef={fieldDef}
-                          value={editedFields[fieldName]}
-                          onChange={v => setEditedFields(prev => ({ ...prev, [fieldName]: v }))}
+                          key={key}
+                          fieldKey={key}
+                          label={label}
+                          fieldDef={def}
+                          value={getNestedValue(editedFields, key)}
+                          onChange={v => setEditedFields(prev => setNestedValue(prev, key, v))}
                         />
                       ))
                     ) : (
-                      // Fallback: render raw JSON fields
+                      // Fallback: render all non-private raw JSON fields
                       rawData && Object.entries(rawData)
                         .filter(([k]) => !k.startsWith("_"))
                         .map(([key, val]) => (
                           <div key={key}>
-                            <Label className="text-sm mb-1.5 block">{key}</Label>
-                            <Input
-                              value={String(val ?? "")}
-                              onChange={e => setEditedFields(prev => ({ ...prev, [key]: e.target.value }))}
-                              className="bg-background text-sm"
-                            />
+                            <Label className="text-sm mb-1.5 block capitalize">{key.replace(/_/g, " ")}</Label>
+                            {typeof val === "object" && val !== null ? (
+                              <Textarea
+                                value={JSON.stringify(val, null, 2)}
+                                onChange={e => {
+                                  try {
+                                    setEditedFields(prev => ({ ...prev, [key]: JSON.parse(e.target.value) }));
+                                  } catch {
+                                    // ignore parse error while typing
+                                  }
+                                }}
+                                className="bg-background text-xs font-mono resize-none"
+                                rows={4}
+                              />
+                            ) : (
+                              <Input
+                                value={String(val ?? "")}
+                                onChange={e => setEditedFields(prev => ({ ...prev, [key]: e.target.value }))}
+                                className="bg-background text-sm"
+                              />
+                            )}
                           </div>
                         ))
                     )}
+
+                    {/* Save buttons at bottom */}
+                    <div className="flex gap-2 pt-4 border-t border-border sticky bottom-0 bg-card/95 backdrop-blur-sm py-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 bg-transparent border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                        onClick={() => handleSave("flagged")}
+                        disabled={isSaving}
+                      >
+                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
+                        Flag for review
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="gap-1.5 flex-1"
+                        onClick={() => handleSave("reviewed")}
+                        disabled={isSaving}
+                      >
+                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                        Save & mark reviewed
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
