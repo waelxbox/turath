@@ -1,28 +1,582 @@
+import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, router } from "./_core/trpc";
+import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import {
+  getProjectsByUserId,
+  getProjectById,
+  createProject,
+  updateProject,
+  getProjectStats,
+  createOnboardingSample,
+  getSamplesByProjectId,
+  updateSampleAiOutput,
+  createDocument,
+  getDocumentsByProjectId,
+  getDocumentById,
+  updateDocumentStatus,
+  createTranscription,
+  getTranscriptionByDocumentId,
+  updateReviewedJson,
+  getReviewedTranscriptions,
+  createJob,
+  getJobsByProjectId,
+  updateJob,
+} from "./db";
+import { generateProjectConfig, validateConfig, refineConfig } from "./onboardingAgent";
+import { processDocument } from "./transcriptionEngine";
+import { storagePut } from "./storage";
+import { TRPCError } from "@trpc/server";
 
-export const appRouter = router({
-    // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
-  system: systemRouter,
-  auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true,
-      } as const;
-    }),
+// ─── Auth Router ──────────────────────────────────────────────────────────────
+
+const authRouter = router({
+  me: publicProcedure.query(opts => opts.ctx.user),
+  logout: publicProcedure.mutation(({ ctx }) => {
+    const cookieOptions = getSessionCookieOptions(ctx.req);
+    ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+    return { success: true } as const;
+  }),
+});
+
+// ─── Projects Router ──────────────────────────────────────────────────────────
+
+const projectsRouter = router({
+  list: protectedProcedure.query(async ({ ctx }) => {
+    return getProjectsByUserId(ctx.user.id);
   }),
 
-  // TODO: add feature routers here, e.g.
-  // todo: router({
-  //   list: protectedProcedure.query(({ ctx }) =>
-  //     db.getUserTodos(ctx.user.id)
-  //   ),
-  // }),
+  get: protectedProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.id, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return project;
+    }),
+
+  create: protectedProcedure
+    .input(z.object({
+      name: z.string().min(1).max(255),
+      description: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await createProject({
+        userId: ctx.user.id,
+        name: input.name,
+        description: input.description ?? null,
+        status: "onboarding",
+      });
+      const projects = await getProjectsByUserId(ctx.user.id);
+      return projects[0]; // most recent
+    }),
+
+  update: protectedProcedure
+    .input(z.object({
+      id: z.number(),
+      name: z.string().min(1).max(255).optional(),
+      description: z.string().optional(),
+      systemPrompt: z.string().optional(),
+      pass2Prompt: z.string().optional(),
+      jsonSchema: z.record(z.string(), z.unknown()).optional(),
+      glossary: z.record(z.string(), z.string()).optional(),
+      postProcessing: z.array(z.unknown()).optional(),
+      modelName: z.string().optional(),
+      pipelineType: z.enum(["single_pass", "two_pass"]).optional(),
+      temperature: z.number().min(0).max(2).optional(),
+      maxTokens: z.number().min(256).max(32768).optional(),
+      status: z.enum(["onboarding", "validating", "active", "archived"]).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { id, ...data } = input;
+      await updateProject(id, ctx.user.id, data as Parameters<typeof updateProject>[2]);
+      return getProjectById(id, ctx.user.id);
+    }),
+
+  stats: protectedProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const stats = await getProjectStats(input.id, ctx.user.id);
+      if (!stats) throw new TRPCError({ code: "NOT_FOUND" });
+      return stats;
+    }),
+});
+
+// ─── Onboarding Router ────────────────────────────────────────────────────────
+
+const onboardingRouter = router({
+  getSamples: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      // Verify ownership
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return getSamplesByProjectId(input.projectId);
+    }),
+
+  uploadSample: protectedProcedure
+    .input(z.object({
+      projectId: z.number(),
+      filename: z.string(),
+      imageBase64: z.string(),
+      mimeType: z.string().default("image/jpeg"),
+      manualTranscription: z.record(z.string(), z.unknown()),
+      isHeldOut: z.boolean().default(false),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Store image to S3
+      const imageBuffer = Buffer.from(input.imageBase64, "base64");
+      const key = `projects/${input.projectId}/samples/${Date.now()}-${input.filename}`;
+      const { url } = await storagePut(key, imageBuffer, input.mimeType ?? "image/jpeg");
+
+      await createOnboardingSample({
+        projectId: input.projectId,
+        imagePath: key,
+        imageUrl: url,
+        filename: input.filename,
+        manualTranscription: input.manualTranscription,
+        isHeldOut: input.isHeldOut,
+      });
+
+      return { success: true, imageUrl: url };
+    }),
+
+  generateConfig: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const samples = await getSamplesByProjectId(input.projectId);
+      if (samples.length < 1) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Upload at least 1 sample before generating config." });
+      }
+
+      // Prepare sample pairs for the onboarding agent
+      const samplePairs = await Promise.all(
+        samples.filter(s => !s.isHeldOut).map(async (s) => {
+          // Re-fetch image from storage for the AI call
+          const { storageGet } = await import("./storage");
+          const { url } = await storageGet(s.imagePath);
+          // Fetch the image bytes and re-encode
+          const resp = await fetch(url);
+          const buf = await resp.arrayBuffer();
+          const base64 = Buffer.from(buf).toString("base64");
+          return {
+            imageBase64: base64,
+            mimeType: "image/jpeg",
+            filename: s.filename ?? "document.jpg",
+            manualTranscription: s.manualTranscription as Record<string, unknown>,
+          };
+        })
+      );
+
+      const config = await generateProjectConfig(samplePairs);
+
+      // Save config to project
+      await updateProject(input.projectId, ctx.user.id, {
+        systemPrompt: config.systemPrompt,
+        pass2Prompt: config.pass2Prompt ?? null,
+        jsonSchema: config.jsonSchema,
+        glossary: config.glossary,
+        postProcessing: config.postProcessing,
+        outputFormats: config.outputFormats,
+        modelName: config.modelName,
+        pipelineType: config.pipelineType,
+        onboardingReasoning: config.reasoning,
+        status: "validating",
+      });
+
+      return config;
+    }),
+
+  validate: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      if (!project.systemPrompt) throw new TRPCError({ code: "BAD_REQUEST", message: "Generate config first." });
+
+      const samples = await getSamplesByProjectId(input.projectId);
+      const heldOut = samples.find(s => s.isHeldOut) ?? samples[samples.length - 1];
+      if (!heldOut) throw new TRPCError({ code: "BAD_REQUEST", message: "No samples found." });
+
+      // Fetch held-out image
+      const { storageGet: storageGetValidate } = await import("./storage");
+      const { url } = await storageGetValidate(heldOut.imagePath);
+      const resp = await fetch(url);
+      const buf = await resp.arrayBuffer();
+      const base64 = Buffer.from(buf).toString("base64");
+
+      const config = {
+        pipelineType: project.pipelineType as "single_pass" | "two_pass",
+        modelName: project.modelName,
+        systemPrompt: project.systemPrompt,
+        pass2Prompt: project.pass2Prompt ?? undefined,
+        jsonSchema: project.jsonSchema as Record<string, { type: "string" | "boolean" | "array" | "number"; description: string; nullable: boolean; displayHint?: "short_text" | "long_text" | "tag_list" }>,
+        glossary: project.glossary as Record<string, string>,
+        postProcessing: (project.postProcessing as Array<{ type: string; field: string; marker?: string; format?: string }>) ?? [],
+        outputFormats: (project.outputFormats as string[]) ?? ["json", "csv"],
+        reasoning: project.onboardingReasoning ?? "",
+      };
+
+      const result = await validateConfig(config, {
+        imageBase64: base64,
+        mimeType: "image/jpeg",
+        filename: heldOut.filename ?? "document.jpg",
+        manualTranscription: heldOut.manualTranscription as Record<string, unknown>,
+      });
+
+      // Save validation results
+      await updateSampleAiOutput(heldOut.id, result.aiOutput, result.score);
+
+      return result;
+    }),
+
+  refine: protectedProcedure
+    .input(z.object({
+      projectId: z.number(),
+      feedback: z.string().min(1),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const samples = await getSamplesByProjectId(input.projectId);
+      const samplePairs = await Promise.all(
+        samples.filter(s => !s.isHeldOut).map(async (s) => {
+          const { storageGet: storageGetRefine } = await import("./storage");
+          const { url } = await storageGetRefine(s.imagePath);
+          const resp = await fetch(url);
+          const buf = await resp.arrayBuffer();
+          const base64 = Buffer.from(buf).toString("base64");
+          return {
+            imageBase64: base64,
+            mimeType: "image/jpeg",
+            filename: s.filename ?? "document.jpg",
+            manualTranscription: s.manualTranscription as Record<string, unknown>,
+          };
+        })
+      );
+
+      const currentConfig = {
+        pipelineType: project.pipelineType as "single_pass" | "two_pass",
+        modelName: project.modelName,
+        systemPrompt: project.systemPrompt ?? "",
+        pass2Prompt: project.pass2Prompt ?? undefined,
+        jsonSchema: project.jsonSchema as Record<string, { type: "string" | "boolean" | "array" | "number"; description: string; nullable: boolean; displayHint?: "short_text" | "long_text" | "tag_list" }>,
+        glossary: project.glossary as Record<string, string>,
+        postProcessing: (project.postProcessing as Array<{ type: string; field: string; marker?: string; format?: string }>) ?? [],
+        outputFormats: (project.outputFormats as string[]) ?? ["json", "csv"],
+        reasoning: project.onboardingReasoning ?? "",
+      };
+
+      const refined = await refineConfig(currentConfig, input.feedback, samplePairs);
+
+      await updateProject(input.projectId, ctx.user.id, {
+        systemPrompt: refined.systemPrompt,
+        pass2Prompt: refined.pass2Prompt ?? null,
+        jsonSchema: refined.jsonSchema,
+        glossary: refined.glossary,
+        postProcessing: refined.postProcessing,
+        outputFormats: refined.outputFormats,
+        modelName: refined.modelName,
+        pipelineType: refined.pipelineType,
+        onboardingReasoning: refined.reasoning,
+      });
+
+      return refined;
+    }),
+
+  activate: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      await updateProject(input.projectId, ctx.user.id, { status: "active" });
+      return { success: true };
+    }),
+});
+
+// ─── Documents Router ─────────────────────────────────────────────────────────
+
+const documentsRouter = router({
+  list: protectedProcedure
+    .input(z.object({
+      projectId: z.number(),
+      status: z.enum(["pending", "processing", "needs_review", "reviewed", "flagged", "error"]).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return getDocumentsByProjectId(input.projectId, input.status);
+    }),
+
+  upload: protectedProcedure
+    .input(z.object({
+      projectId: z.number(),
+      filename: z.string(),
+      fileBase64: z.string(),
+      mimeType: z.string().default("image/jpeg"),
+      fileSizeBytes: z.number().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      if (project.status !== "active") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Project must be active to upload documents." });
+      }
+
+      const buffer = Buffer.from(input.fileBase64, "base64");
+      const key = `projects/${input.projectId}/documents/${Date.now()}-${input.filename}`;
+      const { url } = await storagePut(key, buffer, input.mimeType ?? "image/jpeg");
+
+      await createDocument({
+        projectId: input.projectId,
+        filename: input.filename,
+        storagePath: key,
+        storageUrl: url,
+        mimeType: input.mimeType,
+        fileSizeBytes: input.fileSizeBytes ?? null,
+        status: "pending",
+      });
+
+      const docs = await getDocumentsByProjectId(input.projectId);
+      return docs[0];
+    }),
+
+  transcribe: protectedProcedure
+    .input(z.object({
+      documentId: z.number(),
+      projectId: z.number(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const doc = await getDocumentById(input.documentId, input.projectId);
+      if (!doc) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Mark as processing
+      await updateDocumentStatus(input.documentId, "processing");
+
+      try {
+        // Fetch image from storage
+        const { storageGet: storageGetDoc } = await import("./storage");
+        const { url } = await storageGetDoc(doc.storagePath);
+        const resp = await fetch(url);
+        const buf = await resp.arrayBuffer();
+        const base64 = Buffer.from(buf).toString("base64");
+
+        const result = await processDocument(project, base64, doc.mimeType ?? "image/jpeg", doc.filename);
+
+        if (result.error) {
+          await updateDocumentStatus(input.documentId, "error", result.error);
+          return { success: false, error: result.error };
+        }
+
+        await createTranscription({
+          documentId: input.documentId,
+          projectId: input.projectId,
+          modelUsed: result.modelUsed,
+          rawJson: result.rawJson,
+          originalText: result.originalText ?? null,
+        });
+
+        await updateDocumentStatus(input.documentId, "needs_review");
+        return { success: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await updateDocumentStatus(input.documentId, "error", msg);
+        return { success: false, error: msg };
+      }
+    }),
+
+  batchTranscribe: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const pendingDocs = await getDocumentsByProjectId(input.projectId, "pending");
+      if (pendingDocs.length === 0) {
+        return { queued: 0, message: "No pending documents." };
+      }
+
+      // Create a batch job record
+      await createJob({
+        projectId: input.projectId,
+        type: "batch_transcribe",
+        status: "queued",
+        totalItems: pendingDocs.length,
+        completedItems: 0,
+        metadata: { documentIds: pendingDocs.map(d => d.id) },
+      });
+
+      // Process in background (fire and forget with concurrency limit)
+      const CONCURRENCY = 3;
+      (async () => {
+        const jobs_list = await getJobsByProjectId(input.projectId);
+        const job = jobs_list[0];
+        if (!job) return;
+
+        await updateJob(job.id, { status: "running" });
+
+        let completed = 0;
+        const chunks: typeof pendingDocs[] = [];
+        for (let i = 0; i < pendingDocs.length; i += CONCURRENCY) {
+          chunks.push(pendingDocs.slice(i, i + CONCURRENCY));
+        }
+
+        for (const chunk of chunks) {
+          await Promise.all(chunk.map(async (doc) => {
+            try {
+              await updateDocumentStatus(doc.id, "processing");
+              const { storageGet: storageGetBatch } = await import("./storage");
+              const { url } = await storageGetBatch(doc.storagePath);
+              const resp = await fetch(url);
+              const buf = await resp.arrayBuffer();
+              const base64 = Buffer.from(buf).toString("base64");
+              const result = await processDocument(project, base64, doc.mimeType ?? "image/jpeg", doc.filename);
+
+              if (result.error) {
+                await updateDocumentStatus(doc.id, "error", result.error);
+              } else {
+                await createTranscription({
+                  documentId: doc.id,
+                  projectId: input.projectId,
+                  modelUsed: result.modelUsed,
+                  rawJson: result.rawJson,
+                  originalText: result.originalText ?? null,
+                });
+                await updateDocumentStatus(doc.id, "needs_review");
+              }
+            } catch (err) {
+              await updateDocumentStatus(doc.id, "error", String(err));
+            }
+            completed++;
+          }));
+          await updateJob(job.id, {
+            completedItems: completed,
+            progress: Math.round((completed / pendingDocs.length) * 100),
+          });
+        }
+
+        await updateJob(job.id, { status: "completed", progress: 100, completedItems: pendingDocs.length });
+      })().catch(console.error);
+
+      return { queued: pendingDocs.length, message: `Queued ${pendingDocs.length} documents for transcription.` };
+    }),
+});
+
+// ─── Transcriptions Router ────────────────────────────────────────────────────
+
+const transcriptionsRouter = router({
+  getByDocument: protectedProcedure
+    .input(z.object({ documentId: z.number(), projectId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return getTranscriptionByDocumentId(input.documentId);
+    }),
+
+  saveReview: protectedProcedure
+    .input(z.object({
+      transcriptionId: z.number(),
+      documentId: z.number(),
+      projectId: z.number(),
+      reviewedJson: z.record(z.string(), z.unknown()),
+      status: z.enum(["reviewed", "flagged"]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      await updateReviewedJson(input.transcriptionId, input.reviewedJson);
+      await updateDocumentStatus(input.documentId, input.status);
+      return { success: true };
+    }),
+});
+
+// ─── Export Router ────────────────────────────────────────────────────────────
+
+const exportRouter = router({
+  csv: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const reviewed = await getReviewedTranscriptions(input.projectId);
+      if (reviewed.length === 0) return { csv: "", count: 0 };
+
+      const schema = project.jsonSchema as Record<string, { type: string }> | null;
+      const schemaFields = schema ? Object.keys(schema) : [];
+      const headers = ["filename", "status", "reviewed_at", "model_used", ...schemaFields];
+
+      const rows = reviewed.map(({ transcription, document }) => {
+        const data = (transcription.reviewedJson ?? transcription.rawJson) as Record<string, unknown>;
+        const row: Record<string, string> = {
+          filename: document.filename,
+          status: document.status,
+          reviewed_at: transcription.reviewedAt?.toISOString() ?? "",
+          model_used: transcription.modelUsed,
+        };
+        for (const field of schemaFields) {
+          const val = data[field];
+          row[field] = Array.isArray(val) ? val.join(" | ") : String(val ?? "");
+        }
+        return row;
+      });
+
+      const csvLines = [
+        headers.join(","),
+        ...rows.map(r => headers.map(h => `"${(r[h] ?? "").replace(/"/g, '""')}"`).join(",")),
+      ];
+
+      return { csv: csvLines.join("\n"), count: reviewed.length };
+    }),
+
+  jsonZip: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const reviewed = await getReviewedTranscriptions(input.projectId);
+      return reviewed.map(({ transcription, document }) => ({
+        filename: document.filename.replace(/\.[^.]+$/, "") + ".json",
+        data: transcription.reviewedJson ?? transcription.rawJson,
+      }));
+    }),
+});
+
+// ─── Jobs Router ──────────────────────────────────────────────────────────────
+
+const jobsRouter = router({
+  list: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return getJobsByProjectId(input.projectId);
+    }),
+});
+
+// ─── App Router ───────────────────────────────────────────────────────────────
+
+export const appRouter = router({
+  system: systemRouter,
+  auth: authRouter,
+  projects: projectsRouter,
+  onboarding: onboardingRouter,
+  documents: documentsRouter,
+  transcriptions: transcriptionsRouter,
+  export: exportRouter,
+  jobs: jobsRouter,
 });
 
 export type AppRouter = typeof appRouter;
