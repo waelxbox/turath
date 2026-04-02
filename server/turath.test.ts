@@ -205,3 +205,34 @@ describe("input validation", () => {
     })).rejects.toThrow();
   });
 });
+
+// ─── RAG router tests ─────────────────────────────────────────────────────────
+
+describe("rag.search", () => {
+  it("throws UNAUTHORIZED when not logged in", async () => {
+    const ctx = createUnauthContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(caller.rag.search({ projectId: 1, query: "test query" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+});
+
+describe("rag.chat", () => {
+  it("throws UNAUTHORIZED when not logged in", async () => {
+    const ctx = createUnauthContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(caller.rag.chat({ projectId: 1, question: "What are the themes?" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("rejects empty question", async () => {
+    const { ctx } = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(caller.rag.chat({ projectId: 1, question: "" })).rejects.toThrow();
+  });
+
+  it("rejects question exceeding max length", async () => {
+    const { ctx } = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const longQuestion = "a".repeat(4001);
+    await expect(caller.rag.chat({ projectId: 1, question: longQuestion })).rejects.toThrow();
+  });
+});

@@ -102,3 +102,20 @@
 
 ## Bug Fixes & Improvements (Round 7)
 - [x] Fix routing 404 — root cause was wrong wildcard syntax in App.tsx: regexparam v3 requires /projects/:id/* not /projects/:id/:rest* (which never matched). Verified all 7 URL patterns now route correctly.
+
+## Phase 2: Supabase Migration + RAG (Round 8)
+- [x] Add Supabase DATABASE_URL secret (Postgres connection string)
+- [x] Update drizzle.config.ts to use postgres driver
+- [x] Rewrite drizzle/schema.ts from mysqlTable to pgTable with all 6 tables
+- [x] Enable pgvector extension on Supabase
+- [x] Add document_embeddings table (id, project_id, document_id, content, metadata, embedding vector(768))
+- [x] Run Drizzle migration to Supabase Postgres (all 7 tables created)
+- [x] Update server/db.ts all query helpers for Postgres (drizzle-orm/postgres-js)
+- [x] Build embeddingService.ts — Google text-embedding-004 (768-dim), RETRIEVAL_DOCUMENT + RETRIEVAL_QUERY task types
+- [x] Wire embedding generation into the transcription review mutation (fire-and-forget)
+- [x] Build rag.search tRPC endpoint with strict projectId filter + cosine similarity via pgvector
+- [x] Build rag.chat tRPC backend — top-5 retrieval, context injection, LLM answer with source citations
+- [x] Build SemanticChatPage UI — chat bubbles, source citation toggle, suggested questions, typing indicator
+- [x] Add Ask Archive nav item to project workspace sidebar
+- [x] Update tests: 21 vitest tests passing (added 4 RAG tests)
+- [ ] Push to GitHub and deploy

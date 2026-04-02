@@ -28,6 +28,8 @@ import { generateProjectConfig, validateConfig, refineConfig } from "./onboardin
 import { processDocument } from "./transcriptionEngine";
 import { storagePut } from "./storage";
 import { TRPCError } from "@trpc/server";
+import { embedTranscription, semanticSearch } from "./embeddingService";
+import { invokeLLM } from "./_core/llm";
 
 // ─── Auth Router ──────────────────────────────────────────────────────────────
 
@@ -510,7 +512,105 @@ const transcriptionsRouter = router({
 
       await updateReviewedJson(input.transcriptionId, input.reviewedJson);
       await updateDocumentStatus(input.documentId, input.status);
+
+      // Fire-and-forget: generate embedding for semantic search
+      const doc = await getDocumentById(input.documentId, input.projectId);
+      if (doc) {
+        embedTranscription({
+          projectId: input.projectId,
+          documentId: input.documentId,
+          transcriptionId: input.transcriptionId,
+          reviewedJson: input.reviewedJson as Record<string, unknown>,
+          filename: doc.filename,
+        }).catch((err) => console.warn("[Embedding] Failed:", err));
+      }
+
       return { success: true };
+    }),
+});
+
+// ─── RAG / Semantic Chat Router ───────────────────────────────────────────────
+
+const ragRouter = router({
+  /**
+   * Semantic search: returns the top-k most similar reviewed documents.
+   * Strictly scoped to the calling user's project.
+   */
+  search: protectedProcedure
+    .input(z.object({
+      projectId: z.number(),
+      query: z.string().min(1).max(2000),
+      limit: z.number().min(1).max(20).default(5),
+    }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      const results = await semanticSearch(input.projectId, input.query, input.limit);
+      return results;
+    }),
+
+  /**
+   * RAG chat: answers a question using the project's reviewed transcriptions.
+   * Retrieves the top-5 most relevant documents, then calls the LLM with
+   * the retrieved context to generate a grounded answer.
+   */
+  chat: protectedProcedure
+    .input(z.object({
+      projectId: z.number(),
+      question: z.string().min(1).max(4000),
+      history: z.array(z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string(),
+      })).default([]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Retrieve relevant documents via semantic search
+      const hits = await semanticSearch(input.projectId, input.question, 5);
+
+      if (hits.length === 0) {
+        return {
+          answer: "No reviewed documents found in this project yet. Please transcribe and review some documents first, then I can answer questions about them.",
+          sources: [],
+        };
+      }
+
+      // Build context block from retrieved documents
+      const contextBlock = hits
+        .map((h, i) => `[Document ${i + 1}]\n${h.content}`)
+        .join("\n\n---\n\n");
+
+      const systemPrompt = `You are an expert research assistant for the archival project "${project.name}".
+You answer questions using ONLY the document excerpts provided below.
+If the answer is not in the documents, say so clearly.
+Always cite which document(s) you used by referencing [Document N].
+Be concise, accurate, and scholarly.
+
+=== RETRIEVED DOCUMENTS ===
+${contextBlock}
+=== END OF DOCUMENTS ===`;
+
+      const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+        { role: "system", content: systemPrompt },
+        ...input.history.map(h => ({ role: h.role as "user" | "assistant", content: h.content })),
+        { role: "user", content: input.question },
+      ];
+
+      const response = await invokeLLM({ messages });
+      const answer = response.choices[0]?.message?.content ?? "I could not generate a response.";
+
+      // Build source citations
+      const sources = hits.map((h, i) => ({
+        index: i + 1,
+        documentId: h.documentId,
+        filename: (h.metadata as Record<string, unknown>)?.filename as string ?? `Document ${h.documentId}`,
+        similarity: Math.round(h.similarity * 100) / 100,
+        excerpt: h.content.slice(0, 200) + (h.content.length > 200 ? "..." : ""),
+      }));
+
+      return { answer, sources };
     }),
 });
 
@@ -590,6 +690,7 @@ export const appRouter = router({
   transcriptions: transcriptionsRouter,
   export: exportRouter,
   jobs: jobsRouter,
+  rag: ragRouter,
 });
 
 export type AppRouter = typeof appRouter;

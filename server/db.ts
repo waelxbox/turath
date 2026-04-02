@@ -1,5 +1,6 @@
 import { and, eq, desc, sql, count } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import {
   users, InsertUser,
   projects, InsertProject, Project,
@@ -7,14 +8,30 @@ import {
   documents, InsertDocument, Document,
   transcriptions, InsertTranscription,
   jobs, InsertJob,
+  documentEmbeddings, InsertDocumentEmbedding,
 } from "../drizzle/schema";
+import { ENV } from "./_core/env";
+
+// ─── Database Connection ──────────────────────────────────────────────────────
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let _client: ReturnType<typeof postgres> | null = null;
 
 export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
+  if (!_db) {
+    const url = process.env.SUPABASE_DATABASE_URL;
+    if (!url) {
+      console.warn("[Database] SUPABASE_DATABASE_URL not set");
+      return null;
+    }
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      const isPgBouncer = url.includes("pgbouncer=true");
+      _client = postgres(url, {
+        max: isPgBouncer ? 10 : 5,
+        prepare: !isPgBouncer,
+        connect_timeout: 15,
+      });
+      _db = drizzle(_client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -24,8 +41,6 @@ export async function getDb() {
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
-
-import { ENV } from "./_core/env";
 
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) throw new Error("User openId is required for upsert");
@@ -43,7 +58,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   else if (user.openId === ENV.ownerOpenId) { values.role = "admin"; updateSet.role = "admin"; }
   if (!values.lastSignedIn) values.lastSignedIn = new Date();
   if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
-  await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+  await db.insert(users).values(values).onConflictDoUpdate({
+    target: users.openId,
+    set: updateSet,
+  });
 }
 
 export async function getUserByOpenId(openId: string) {
@@ -73,34 +91,45 @@ export async function getProjectById(id: number, userId: number) {
 export async function createProject(data: InsertProject) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(projects).values(data);
+  const result = await db.insert(projects).values(data).returning();
   return result[0];
 }
 
 export async function updateProject(id: number, userId: number, data: Partial<InsertProject>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(projects).set(data).where(and(eq(projects.id, id), eq(projects.userId, userId)));
+  await db.update(projects)
+    .set({ ...data, updatedAt: new Date() })
+    .where(and(eq(projects.id, id), eq(projects.userId, userId)));
+}
+
+export async function deleteProject(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(projects).where(and(eq(projects.id, id), eq(projects.userId, userId)));
 }
 
 export async function getProjectStats(projectId: number, userId: number) {
   const db = await getDb();
-  if (!db) return null;
-  // Verify ownership
+  if (!db) return { total: 0, reviewed: 0, flagged: 0, needsReview: 0, processing: 0, pending: 0, errors: 0 };
   const project = await getProjectById(projectId, userId);
-  if (!project) return null;
-  const statusCounts = await db.select({
-    status: documents.status,
-    count: count(),
-  }).from(documents).where(eq(documents.projectId, projectId)).groupBy(documents.status);
+  if (!project) throw new Error("Project not found");
+  const statusCounts = await db
+    .select({ status: documents.status, count: count() })
+    .from(documents)
+    .where(eq(documents.projectId, projectId))
+    .groupBy(documents.status);
   const total = statusCounts.reduce((sum, r) => sum + Number(r.count), 0);
-  const reviewed = statusCounts.find(r => r.status === "reviewed")?.count ?? 0;
-  const flagged = statusCounts.find(r => r.status === "flagged")?.count ?? 0;
-  const needsReview = statusCounts.find(r => r.status === "needs_review")?.count ?? 0;
-  const processing = statusCounts.find(r => r.status === "processing")?.count ?? 0;
-  const pending = statusCounts.find(r => r.status === "pending")?.count ?? 0;
-  const errors = statusCounts.find(r => r.status === "error")?.count ?? 0;
-  return { total, reviewed: Number(reviewed), flagged: Number(flagged), needsReview: Number(needsReview), processing: Number(processing), pending: Number(pending), errors: Number(errors) };
+  const get = (s: string) => Number(statusCounts.find(r => r.status === s)?.count ?? 0);
+  return {
+    total,
+    reviewed: get("reviewed"),
+    flagged: get("flagged"),
+    needsReview: get("needs_review"),
+    processing: get("processing"),
+    pending: get("pending"),
+    errors: get("error"),
+  };
 }
 
 // ─── Onboarding Samples ───────────────────────────────────────────────────────
@@ -108,14 +137,16 @@ export async function getProjectStats(projectId: number, userId: number) {
 export async function createOnboardingSample(data: InsertOnboardingSample) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(onboardingSamples).values(data);
+  const result = await db.insert(onboardingSamples).values(data).returning();
   return result[0];
 }
 
 export async function getSamplesByProjectId(projectId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(onboardingSamples).where(eq(onboardingSamples.projectId, projectId)).orderBy(onboardingSamples.createdAt);
+  return db.select().from(onboardingSamples)
+    .where(eq(onboardingSamples.projectId, projectId))
+    .orderBy(onboardingSamples.createdAt);
 }
 
 export async function updateSampleAiOutput(id: number, aiOutput: unknown, validationScore: number) {
@@ -129,7 +160,7 @@ export async function updateSampleAiOutput(id: number, aiOutput: unknown, valida
 export async function createDocument(data: InsertDocument) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(documents).values(data);
+  const result = await db.insert(documents).values(data).returning();
   return result[0];
 }
 
@@ -154,10 +185,8 @@ export async function updateDocumentStatus(id: number, status: Document["status"
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const update: Partial<InsertDocument> = { status };
-  if (status === "needs_review" || status === "reviewed" || status === "error") {
-    update.processedAt = new Date();
-  }
-  if (errorMessage) update.errorMessage = errorMessage;
+  if (["needs_review", "reviewed", "error"].includes(status)) update.processedAt = new Date();
+  if (errorMessage !== undefined) update.errorMessage = errorMessage;
   await db.update(documents).set(update).where(eq(documents.id, id));
 }
 
@@ -166,7 +195,7 @@ export async function updateDocumentStatus(id: number, status: Document["status"
 export async function createTranscription(data: InsertTranscription) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(transcriptions).values(data);
+  const result = await db.insert(transcriptions).values(data).returning();
   return result[0];
 }
 
@@ -183,7 +212,9 @@ export async function getTranscriptionByDocumentId(documentId: number) {
 export async function updateReviewedJson(id: number, reviewedJson: unknown) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(transcriptions).set({ reviewedJson, reviewedAt: new Date() }).where(eq(transcriptions.id, id));
+  await db.update(transcriptions)
+    .set({ reviewedJson, reviewedAt: new Date(), updatedAt: new Date() })
+    .where(eq(transcriptions.id, id));
 }
 
 export async function getReviewedTranscriptions(projectId: number) {
@@ -206,18 +237,80 @@ export async function getReviewedTranscriptions(projectId: number) {
 export async function createJob(data: InsertJob) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(jobs).values(data);
+  const result = await db.insert(jobs).values(data).returning();
   return result[0];
 }
 
 export async function getJobsByProjectId(projectId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(jobs).where(eq(jobs.projectId, projectId)).orderBy(desc(jobs.createdAt)).limit(20);
+  return db.select().from(jobs)
+    .where(eq(jobs.projectId, projectId))
+    .orderBy(desc(jobs.createdAt))
+    .limit(20);
 }
 
 export async function updateJob(id: number, data: Partial<InsertJob>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(jobs).set(data).where(eq(jobs.id, id));
+}
+
+// ─── Document Embeddings (pgvector) ──────────────────────────────────────────
+
+export async function createEmbedding(data: InsertDocumentEmbedding) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(documentEmbeddings).values(data).returning();
+  return result[0];
+}
+
+export async function deleteEmbeddingsByDocumentId(documentId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(documentEmbeddings).where(eq(documentEmbeddings.documentId, documentId));
+}
+
+/**
+ * Semantic similarity search using pgvector cosine distance.
+ * Strictly scoped to projectId for tenant isolation.
+ */
+export async function searchEmbeddings(
+  projectId: number,
+  queryEmbedding: number[],
+  limit = 5
+): Promise<Array<{
+  id: string;
+  documentId: number;
+  transcriptionId: number | null;
+  content: string;
+  metadata: Record<string, unknown> | null;
+  similarity: number;
+}>> {
+  const db = await getDb();
+  if (!db) return [];
+  const vectorStr = `[${queryEmbedding.join(",")}]`;
+  const results = await db.execute(
+    sql`
+      SELECT
+        de.id::text,
+        de."documentId",
+        de."transcriptionId",
+        de.content,
+        de.metadata,
+        1 - (de.embedding <=> ${vectorStr}::vector) AS similarity
+      FROM document_embeddings de
+      WHERE de."projectId" = ${projectId}
+      ORDER BY de.embedding <=> ${vectorStr}::vector
+      LIMIT ${limit}
+    `
+  );
+  return (results as unknown) as Array<{
+    id: string;
+    documentId: number;
+    transcriptionId: number | null;
+    content: string;
+    metadata: Record<string, unknown> | null;
+    similarity: number;
+  }>;
 }

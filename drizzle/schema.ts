@@ -1,27 +1,59 @@
 import {
-  int,
-  mysqlEnum,
-  mysqlTable,
+  integer,
+  pgEnum,
+  pgTable,
   text,
   timestamp,
   varchar,
-  json,
-  float,
+  jsonb,
+  real,
   boolean,
   index,
-} from "drizzle-orm/mysql-core";
+  serial,
+  uuid,
+} from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+
+// ─── Custom vector type for pgvector ─────────────────────────────────────────
+// We use a raw SQL column since drizzle-orm doesn't have a built-in vector type.
+// Dimension 768 matches Google text-embedding-004.
+import { customType } from "drizzle-orm/pg-core";
+
+export const vector = customType<{ data: number[]; driverData: string; config: { dimensions?: number } }>({
+  dataType(config) {
+    return `vector(${(config as { dimensions?: number } | undefined)?.dimensions ?? 768})`;
+  },
+  fromDriver(value: string): number[] {
+    // pgvector returns "[0.1,0.2,...]" — parse it
+    return JSON.parse(value.replace(/^\[/, "[").replace(/\]$/, "]"));
+  },
+  toDriver(value: number[]): string {
+    return `[${value.join(",")}]`;
+  },
+});
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+export const roleEnum = pgEnum("role", ["user", "admin"]);
+export const projectStatusEnum = pgEnum("project_status", ["onboarding", "validating", "active", "archived"]);
+export const pipelineTypeEnum = pgEnum("pipeline_type", ["single_pass", "two_pass"]);
+export const documentStatusEnum = pgEnum("document_status", [
+  "pending", "processing", "needs_review", "reviewed", "flagged", "error",
+]);
+export const jobTypeEnum = pgEnum("job_type", ["transcribe", "batch_transcribe", "validate_config"]);
+export const jobStatusEnum = pgEnum("job_status", ["queued", "running", "completed", "failed"]);
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 
-export const users = mysqlTable("users", {
-  id: int("id").autoincrement().primaryKey(),
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  role: roleEnum("role").default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
@@ -30,37 +62,33 @@ export type InsertUser = typeof users.$inferInsert;
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
 
-export const projects = mysqlTable("projects", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+export const projects = pgTable("projects", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
-  status: mysqlEnum("status", ["onboarding", "validating", "active", "archived"])
-    .default("onboarding")
-    .notNull(),
+  status: projectStatusEnum("status").default("onboarding").notNull(),
 
   // AI Engine Configuration
   modelProvider: varchar("modelProvider", { length: 64 }).default("gemini").notNull(),
   modelName: varchar("modelName", { length: 128 }).default("gemini-2.5-flash").notNull(),
-  pipelineType: mysqlEnum("pipelineType", ["single_pass", "two_pass"])
-    .default("single_pass")
-    .notNull(),
-  temperature: float("temperature").default(0.1).notNull(),
-  maxTokens: int("maxTokens").default(4096).notNull(),
+  pipelineType: pipelineTypeEnum("pipelineType").default("single_pass").notNull(),
+  temperature: real("temperature").default(0.1).notNull(),
+  maxTokens: integer("maxTokens").default(4096).notNull(),
 
   // Generated configuration (from AI onboarding agent)
   systemPrompt: text("systemPrompt"),
-  pass2Prompt: text("pass2Prompt"),       // Only for two_pass pipelines
-  jsonSchema: json("jsonSchema"),          // { fieldName: { type, description, nullable, displayHint } }
-  glossary: json("glossary"),             // { term: definition }
-  postProcessing: json("postProcessing"), // [{ type, field, ... }]
-  outputFormats: json("outputFormats"),   // ["json", "csv", "tei_xml"]
+  pass2Prompt: text("pass2Prompt"),
+  jsonSchema: jsonb("jsonSchema"),
+  glossary: jsonb("glossary"),
+  postProcessing: jsonb("postProcessing"),
+  outputFormats: jsonb("outputFormats"),
 
   // Onboarding reasoning from AI agent
   onboardingReasoning: text("onboardingReasoning"),
 
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 }, (t) => [
   index("projects_userId_idx").on(t.userId),
 ]);
@@ -70,16 +98,16 @@ export type InsertProject = typeof projects.$inferInsert;
 
 // ─── Onboarding Samples ───────────────────────────────────────────────────────
 
-export const onboardingSamples = mysqlTable("onboarding_samples", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  imagePath: text("imagePath").notNull(),        // S3/storage path
-  imageUrl: text("imageUrl"),                    // Public URL for display
+export const onboardingSamples = pgTable("onboarding_samples", {
+  id: serial("id").primaryKey(),
+  projectId: integer("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  imagePath: text("imagePath").notNull(),
+  imageUrl: text("imageUrl"),
   filename: varchar("filename", { length: 255 }),
-  manualTranscription: json("manualTranscription").notNull(), // Researcher's gold standard
-  aiOutput: json("aiOutput"),                    // AI output during validation
-  validationScore: float("validationScore"),     // 0-100 similarity score
-  isHeldOut: boolean("isHeldOut").default(false).notNull(), // Used for validation
+  manualTranscription: jsonb("manualTranscription").notNull(),
+  aiOutput: jsonb("aiOutput"),
+  validationScore: real("validationScore"),
+  isHeldOut: boolean("isHeldOut").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => [
   index("samples_projectId_idx").on(t.projectId),
@@ -90,24 +118,15 @@ export type InsertOnboardingSample = typeof onboardingSamples.$inferInsert;
 
 // ─── Documents ────────────────────────────────────────────────────────────────
 
-export const documents = mysqlTable("documents", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
+export const documents = pgTable("documents", {
+  id: serial("id").primaryKey(),
+  projectId: integer("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
   filename: varchar("filename", { length: 255 }).notNull(),
-  storagePath: text("storagePath").notNull(),    // S3/storage path
-  storageUrl: text("storageUrl"),                // Public URL
+  storagePath: text("storagePath").notNull(),
+  storageUrl: text("storageUrl"),
   mimeType: varchar("mimeType", { length: 64 }).default("image/jpeg"),
-  fileSizeBytes: int("fileSizeBytes"),
-  status: mysqlEnum("status", [
-    "pending",
-    "processing",
-    "needs_review",
-    "reviewed",
-    "flagged",
-    "error",
-  ])
-    .default("pending")
-    .notNull(),
+  fileSizeBytes: integer("fileSizeBytes"),
+  status: documentStatusEnum("status").default("pending").notNull(),
   errorMessage: text("errorMessage"),
   uploadedAt: timestamp("uploadedAt").defaultNow().notNull(),
   processedAt: timestamp("processedAt"),
@@ -121,18 +140,18 @@ export type InsertDocument = typeof documents.$inferInsert;
 
 // ─── Transcriptions ───────────────────────────────────────────────────────────
 
-export const transcriptions = mysqlTable("transcriptions", {
-  id: int("id").autoincrement().primaryKey(),
-  documentId: int("documentId").notNull().references(() => documents.id, { onDelete: "cascade" }),
-  projectId: int("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
+export const transcriptions = pgTable("transcriptions", {
+  id: serial("id").primaryKey(),
+  documentId: integer("documentId").notNull().references(() => documents.id, { onDelete: "cascade" }),
+  projectId: integer("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
   modelUsed: varchar("modelUsed", { length: 128 }).notNull(),
-  rawJson: json("rawJson").notNull(),            // Unmodified AI output
-  reviewedJson: json("reviewedJson"),            // Human-edited version
-  originalText: text("originalText"),            // Pass 1 output for two_pass pipelines
+  rawJson: jsonb("rawJson").notNull(),
+  reviewedJson: jsonb("reviewedJson"),
+  originalText: text("originalText"),
   confidenceNotes: text("confidenceNotes"),
   reviewedAt: timestamp("reviewedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 }, (t) => [
   index("transcriptions_documentId_idx").on(t.documentId),
   index("transcriptions_projectId_idx").on(t.projectId),
@@ -143,19 +162,19 @@ export type InsertTranscription = typeof transcriptions.$inferInsert;
 
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
-export const jobs = mysqlTable("jobs", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  documentId: int("documentId").references(() => documents.id, { onDelete: "cascade" }),
-  type: mysqlEnum("type", ["transcribe", "batch_transcribe", "validate_config"]).notNull(),
-  status: mysqlEnum("status", ["queued", "running", "completed", "failed"]).default("queued").notNull(),
-  progress: int("progress").default(0),          // 0-100
-  totalItems: int("totalItems").default(1),
-  completedItems: int("completedItems").default(0),
+export const jobs = pgTable("jobs", {
+  id: serial("id").primaryKey(),
+  projectId: integer("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  documentId: integer("documentId").references(() => documents.id, { onDelete: "cascade" }),
+  type: jobTypeEnum("type").notNull(),
+  status: jobStatusEnum("status").default("queued").notNull(),
+  progress: integer("progress").default(0),
+  totalItems: integer("totalItems").default(1),
+  completedItems: integer("completedItems").default(0),
   errorMessage: text("errorMessage"),
-  metadata: json("metadata"),                    // Extra job-specific data
+  metadata: jsonb("metadata"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 }, (t) => [
   index("jobs_projectId_idx").on(t.projectId),
   index("jobs_status_idx").on(t.status),
@@ -163,3 +182,24 @@ export const jobs = mysqlTable("jobs", {
 
 export type Job = typeof jobs.$inferSelect;
 export type InsertJob = typeof jobs.$inferInsert;
+
+// ─── Document Embeddings (pgvector) ──────────────────────────────────────────
+// Stores vector embeddings for semantic search. Strictly isolated by project_id.
+// Uses Google text-embedding-004 (768 dimensions).
+
+export const documentEmbeddings = pgTable("document_embeddings", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: integer("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  documentId: integer("documentId").notNull().references(() => documents.id, { onDelete: "cascade" }),
+  transcriptionId: integer("transcriptionId").references(() => transcriptions.id, { onDelete: "cascade" }),
+  content: text("content").notNull(),           // The embedded text string
+  metadata: jsonb("metadata"),                  // { sender, date, site, source, filename }
+  embedding: vector("embedding", { dimensions: 768 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => [
+  index("embeddings_projectId_idx").on(t.projectId),
+  index("embeddings_documentId_idx").on(t.documentId),
+]);
+
+export type DocumentEmbedding = typeof documentEmbeddings.$inferSelect;
+export type InsertDocumentEmbedding = typeof documentEmbeddings.$inferInsert;
