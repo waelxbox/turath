@@ -53,14 +53,14 @@ export default function ProjectOverview({ projectId, project, stats }: Props) {
       {/* Quick actions */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
         <button
-          onClick={() => navigate(`/projects/${projectId}/upload`)}
+          onClick={() => navigate("/upload")}
           className="bg-card border border-border rounded-xl p-5 text-left hover:border-primary/40 transition-colors group"
         >
           <div className="text-sm font-semibold mb-1 group-hover:text-primary transition-colors">Upload documents</div>
           <div className="text-xs text-muted-foreground">Add new scans to the transcription queue</div>
         </button>
         <button
-          onClick={() => navigate(`/projects/${projectId}/review`)}
+          onClick={() => navigate("/review")}
           className="bg-card border border-border rounded-xl p-5 text-left hover:border-primary/40 transition-colors group"
         >
           <div className="text-sm font-semibold mb-1 group-hover:text-primary transition-colors">
@@ -72,7 +72,7 @@ export default function ProjectOverview({ projectId, project, stats }: Props) {
           <div className="text-xs text-muted-foreground">Review and correct AI transcriptions</div>
         </button>
         <button
-          onClick={() => navigate(`/projects/${projectId}/export`)}
+          onClick={() => navigate("/export")}
           className="bg-card border border-border rounded-xl p-5 text-left hover:border-primary/40 transition-colors group"
         >
           <div className="text-sm font-semibold mb-1 group-hover:text-primary transition-colors">Export data</div>
@@ -111,7 +111,7 @@ export default function ProjectOverview({ projectId, project, stats }: Props) {
             variant="outline"
             size="sm"
             className="mt-4 bg-transparent"
-            onClick={() => navigate(`/projects/${projectId}/settings`)}
+            onClick={() => navigate("/settings")}
           >
             Edit configuration
           </Button>

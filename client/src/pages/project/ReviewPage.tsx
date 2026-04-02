@@ -505,8 +505,10 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
 
   const currentIndex = documents?.findIndex(d => d.id === currentDocId) ?? 0;
 
+  // Navigate using a relative path — ReviewPage is rendered inside
+  // <Router base="/projects/:id">, so useLocation's navigate is relative.
   const handleNavigate = (docId: number) => {
-    navigate(`/projects/${projectId}/review/${docId}`);
+    navigate(`/review/${docId}`);
   };
 
   return (

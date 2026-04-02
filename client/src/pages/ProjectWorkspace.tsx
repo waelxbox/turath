@@ -1,4 +1,4 @@
-import { useParams, useLocation, Route, Switch } from "wouter";
+import { useParams, useLocation, Router, Route, Switch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
@@ -9,80 +9,41 @@ import ReviewPage from "./project/ReviewPage";
 import ExportPage from "./project/ExportPage";
 import ProjectSettings from "./project/ProjectSettings";
 import ProjectOverview from "./project/ProjectOverview";
-import { useRoute } from "wouter";
 
 const NAV_ITEMS = [
-  { id: "overview", label: "Overview", icon: BookOpen, path: "" },
-  { id: "upload", label: "Upload", icon: Upload, path: "/upload" },
-  { id: "review", label: "Review", icon: Eye, path: "/review" },
-  { id: "export", label: "Export", icon: Download, path: "/export" },
+  { id: "overview", label: "Overview", icon: BookOpen, path: "/" },
+  { id: "upload",   label: "Upload",   icon: Upload,   path: "/upload" },
+  { id: "review",   label: "Review",   icon: Eye,      path: "/review" },
+  { id: "export",   label: "Export",   icon: Download, path: "/export" },
   { id: "settings", label: "Settings", icon: Settings, path: "/settings" },
 ];
 
-/** Separate component so useRoute hooks work correctly with wouter's context */
-function WorkspaceRoutes({
-  basePath,
+/**
+ * Inner workspace rendered inside a <Router base="/projects/:id">.
+ * All useLocation / Route / useRoute calls here are relative to that base.
+ */
+function WorkspaceInner({
   projectId,
   project,
   stats,
 }: {
-  basePath: string;
   projectId: number;
   project: import("../../../drizzle/schema").Project;
   stats: { total: number; reviewed: number; flagged: number; needsReview: number; processing: number; pending: number; errors: number } | null | undefined;
 }) {
-  const [matchReviewDoc, paramsReviewDoc] = useRoute(`${basePath}/review/:docId`);
-  const [matchReview] = useRoute(`${basePath}/review`);
-  const [matchUpload] = useRoute(`${basePath}/upload`);
-  const [matchExport] = useRoute(`${basePath}/export`);
-  const [matchSettings] = useRoute(`${basePath}/settings`);
-
-  if (matchUpload) return <UploadPage projectId={projectId} project={project} />;
-  if (matchExport) return <ExportPage projectId={projectId} project={project} />;
-  if (matchSettings) return <ProjectSettings projectId={projectId} project={project} />;
-  if (matchReviewDoc) return <ReviewPage projectId={projectId} project={project} docId={paramsReviewDoc?.docId} />;
-  if (matchReview) return <ReviewPage projectId={projectId} project={project} />;
-  return <ProjectOverview projectId={projectId} project={project} stats={stats} />;
-}
-
-export default function ProjectWorkspace() {
-  const { id } = useParams<{ id: string }>();
-  const projectId = parseInt(id ?? "0");
   const [location, navigate] = useLocation();
-  const { isAuthenticated, loading: authLoading } = useAuth();
 
-  const { data: project, isLoading } = trpc.projects.get.useQuery(
-    { id: projectId },
-    { enabled: !!projectId && isAuthenticated }
-  );
-  const { data: stats } = trpc.projects.stats.useQuery(
-    { id: projectId },
-    { enabled: !!projectId && isAuthenticated }
-  );
-
-  if (authLoading || isLoading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="w-6 h-6 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) { window.location.href = getLoginUrl(); return null; }
-  if (!project) return <div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">Project not found</div>;
-
-  // Determine active nav item
-  const basePath = `/projects/${projectId}`;
-  const subPath = location.replace(basePath, "") || "";
-  const activeNav = NAV_ITEMS.find(n => n.path !== "" && subPath.startsWith(n.path))?.id ?? "overview";
+  // Determine active nav from relative path
+  const activeNav =
+    NAV_ITEMS.find(n => n.path !== "/" && location.startsWith(n.path))?.id ?? "overview";
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="flex flex-col min-h-0 flex-1">
       {/* Top header */}
       <header className="border-b border-border bg-card/50 flex-shrink-0">
         <div className="container flex items-center justify-between h-14">
           <div className="flex items-center gap-2 text-sm">
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => navigate("/dashboard")}>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { window.location.href = "/dashboard"; }}>
               <ArrowLeft className="w-3.5 h-3.5" />
             </Button>
             <span className="text-muted-foreground">Projects</span>
@@ -94,7 +55,9 @@ export default function ProjectWorkspace() {
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 <span>{stats.total} docs</span>
                 <span className="text-green-400">{stats.reviewed} reviewed</span>
-                {stats.needsReview > 0 && <span className="text-yellow-400">{stats.needsReview} pending review</span>}
+                {stats.needsReview > 0 && (
+                  <span className="text-yellow-400">{stats.needsReview} pending review</span>
+                )}
               </div>
             )}
           </div>
@@ -111,7 +74,9 @@ export default function ProjectWorkspace() {
               </div>
               <div className="min-w-0">
                 <div className="text-xs font-semibold truncate">{project.name}</div>
-                <div className="text-[10px] text-sidebar-foreground/50 capitalize">{project.pipelineType.replace("_", " ")}</div>
+                <div className="text-[10px] text-sidebar-foreground/50 capitalize">
+                  {project.pipelineType.replace("_", " ")}
+                </div>
               </div>
             </div>
           </div>
@@ -120,10 +85,12 @@ export default function ProjectWorkspace() {
             {NAV_ITEMS.map(item => {
               const Icon = item.icon;
               const isActive = activeNav === item.id;
+              // Navigate to the nav item's relative path (wouter will prepend the base)
+              const handleClick = () => navigate(item.path);
               return (
                 <button
                   key={item.id}
-                  onClick={() => navigate(`${basePath}${item.path}`)}
+                  onClick={handleClick}
                   className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors text-left
                     ${isActive
                       ? "bg-sidebar-accent text-sidebar-primary font-medium"
@@ -159,11 +126,82 @@ export default function ProjectWorkspace() {
           )}
         </aside>
 
-        {/* Main content */}
+        {/* Main content — nested Switch relative to base */}
         <main className="flex-1 overflow-auto">
-          <WorkspaceRoutes basePath={basePath} projectId={projectId} project={project} stats={stats} />
+          <Switch>
+            <Route path="/upload">
+              <UploadPage projectId={projectId} project={project} />
+            </Route>
+            <Route path="/export">
+              <ExportPage projectId={projectId} project={project} />
+            </Route>
+            <Route path="/settings">
+              <ProjectSettings projectId={projectId} project={project} />
+            </Route>
+            {/* review with a specific document selected */}
+            <Route path="/review/:docId">
+              {(params) => (
+                <ReviewPage projectId={projectId} project={project} docId={params.docId} />
+              )}
+            </Route>
+            {/* review queue (no specific doc) */}
+            <Route path="/review">
+              <ReviewPage projectId={projectId} project={project} />
+            </Route>
+            {/* default: overview */}
+            <Route>
+              <ProjectOverview projectId={projectId} project={project} stats={stats} />
+            </Route>
+          </Switch>
         </main>
       </div>
+    </div>
+  );
+}
+
+export default function ProjectWorkspace() {
+  const { id } = useParams<{ id: string }>();
+  const projectId = parseInt(id ?? "0");
+  const { isAuthenticated, loading: authLoading } = useAuth();
+
+  const { data: project, isLoading } = trpc.projects.get.useQuery(
+    { id: projectId },
+    { enabled: !!projectId && isAuthenticated }
+  );
+  const { data: stats } = trpc.projects.stats.useQuery(
+    { id: projectId },
+    { enabled: !!projectId && isAuthenticated }
+  );
+
+  if (authLoading || isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) { window.location.href = getLoginUrl(); return null; }
+  if (!project) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">
+        Project not found
+      </div>
+    );
+  }
+
+  const basePath = `/projects/${projectId}`;
+
+  return (
+    <div className="min-h-screen bg-background flex flex-col">
+      {/*
+        Wrap the entire workspace in a nested Router with base="/projects/:id".
+        This makes all child Route, useLocation, and useRoute calls relative to this base,
+        so "/review/:docId" correctly matches "/projects/30001/review/90016".
+      */}
+      <Router base={basePath}>
+        <WorkspaceInner projectId={projectId} project={project} stats={stats} />
+      </Router>
     </div>
   );
 }
