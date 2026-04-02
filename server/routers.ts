@@ -20,6 +20,7 @@ import {
   getTranscriptionByDocumentId,
   updateReviewedJson,
   getReviewedTranscriptions,
+  getReviewedDocsWithoutEmbeddings,
   createJob,
   getJobsByProjectId,
   updateJob,
@@ -177,6 +178,47 @@ const projectsRouter = router({
       } catch {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "LLM returned invalid JSON" });
       }
+    }),
+
+  /**
+   * Re-index all reviewed documents in a project.
+   * Generates embeddings for all transcriptions with status reviewed/flagged that don't have embeddings yet.
+   * Returns the count of documents that were indexed.
+   */
+  reindexAll: protectedProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.id, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Get all reviewed/flagged documents that don't have embeddings
+      const docs = await getReviewedDocsWithoutEmbeddings(input.id);
+
+      // Generate embeddings in batches
+      const batchSize = 5;
+      let indexed = 0;
+
+      for (let i = 0; i < docs.length; i += batchSize) {
+        const batch = docs.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (doc) => {
+            try {
+              await embedTranscription({
+                projectId: input.id,
+                documentId: doc.documentId,
+                transcriptionId: doc.transcriptionId,
+                reviewedJson: doc.reviewedJson as Record<string, unknown>,
+                filename: doc.filename,
+              });
+              indexed++;
+            } catch (err) {
+              console.error(`Failed to index doc ${doc.documentId}:`, err);
+            }
+          })
+        );
+      }
+
+      return { indexed };
     }),
 });
 

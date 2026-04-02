@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
-import { Loader2, Save, AlertTriangle, Sparkles } from "lucide-react";
+import { Loader2, Save, AlertTriangle, Sparkles, RefreshCw } from "lucide-react";
 
 interface Props {
   projectId: number;
@@ -53,6 +53,17 @@ export default function ProjectSettings({ projectId, project }: Props) {
       toast.success("Glossary generated — review and save when ready");
     },
     onError: (err) => toast.error(`Glossary generation failed: ${err.message}`),
+  });
+
+  const reindexAll = trpc.projects.reindexAll.useMutation({
+    onSuccess: (data) => {
+      if (data.indexed === 0) {
+        toast.info("All reviewed documents are already indexed");
+      } else {
+        toast.success(`Successfully indexed ${data.indexed} document${data.indexed !== 1 ? "s" : ""}`);
+      }
+    },
+    onError: (err) => toast.error(`Re-indexing failed: ${err.message}`),
   });
 
   const updateProject = trpc.projects.update.useMutation({
@@ -291,6 +302,31 @@ export default function ProjectSettings({ projectId, project }: Props) {
             rows={8}
           />
           {!glossaryValid && <p className="text-xs text-destructive mt-1">Invalid JSON</p>}
+        </section>
+
+        {/* Semantic Index */}
+        <section className="border-t border-border pt-8">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Semantic index</h3>
+              <p className="text-xs text-muted-foreground max-w-md">
+                Generates embeddings for all reviewed documents that are not yet indexed.
+                Run this after the initial review batch, or whenever Ask Archive and Search return no results.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2 flex-shrink-0"
+              disabled={reindexAll.isPending}
+              onClick={() => reindexAll.mutate({ id: projectId })}
+            >
+              {reindexAll.isPending
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <RefreshCw className="w-4 h-4" />}
+              {reindexAll.isPending ? "Indexing…" : "Re-index all"}
+            </Button>
+          </div>
         </section>
 
         {/* Save */}

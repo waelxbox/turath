@@ -118,7 +118,7 @@
 - [x] Build SemanticChatPage UI — chat bubbles, source citation toggle, suggested questions, typing indicator
 - [x] Add Ask Archive nav item to project workspace sidebar
 - [x] Update tests: 21 vitest tests passing (added 4 RAG tests)
-- [ ] Push to GitHub and deploy
+- [x] Push to GitHub and deploy
 
 ## Bug Fixes & Features (Round 9)
 - [x] Fix embedding API 404 — switch from v1beta to v1 endpoint for text-embedding-004
@@ -130,5 +130,14 @@
 - [x] Switched to gemini-embedding-001 (3072 dimensions, v1beta endpoint) — confirmed working
 - [x] Updated drizzle/schema.ts vector column from 768 to 3072 dimensions
 - [x] Ran ALTER TABLE migration on Supabase to resize the embedding column
+- [x] 21 tests passing, zero TypeScript errors
+- [x] Push to GitHub
+
+## Features (Round 11)
+- [x] Upgrade embedding model from gemini-embedding-001 to gemini-embedding-2-preview
+- [x] Confirmed gemini-embedding-2-preview produces 3072-dim vectors (same as gemini-embedding-001)
+- [x] Add getReviewedDocsWithoutEmbeddings helper to db.ts
+- [x] Add projects.reindexAll tRPC mutation to backfill embeddings for all reviewed documents (batches of 5)
+- [x] Add Re-index all button to Project Settings with loading state and success/info toasts
 - [x] 21 tests passing, zero TypeScript errors
 - [ ] Push to GitHub

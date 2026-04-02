@@ -16,7 +16,7 @@ import {
   searchEmbeddings,
 } from "./db";
 
-const EMBEDDING_MODEL = "gemini-embedding-001";
+const EMBEDDING_MODEL = "gemini-embedding-2-preview";
 const EMBEDDING_DIMENSIONS = 3072;
 
 /**

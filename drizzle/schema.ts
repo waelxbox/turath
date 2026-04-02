@@ -16,7 +16,7 @@ import { sql } from "drizzle-orm";
 
 // ─── Custom vector type for pgvector ─────────────────────────────────────────
 // We use a raw SQL column since drizzle-orm doesn't have a built-in vector type.
-// Dimension 3072 matches Google gemini-embedding-001.
+// Dimension 3072 matches Google gemini-embedding-2-preview.
 import { customType } from "drizzle-orm/pg-core";
 
 export const vector = customType<{ data: number[]; driverData: string; config: { dimensions?: number } }>({
@@ -185,7 +185,7 @@ export type InsertJob = typeof jobs.$inferInsert;
 
 // ─── Document Embeddings (pgvector) ──────────────────────────────────────────
 // Stores vector embeddings for semantic search. Strictly isolated by project_id.
-// Uses Google gemini-embedding-001 (3072 dimensions).
+// Uses Google gemini-embedding-2-preview (3072 dimensions).
 
 export const documentEmbeddings = pgTable("document_embeddings", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),

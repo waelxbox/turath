@@ -1,4 +1,4 @@
-import { and, eq, desc, sql, count } from "drizzle-orm";
+import { and, eq, desc, sql, count, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -313,4 +313,38 @@ export async function searchEmbeddings(
     metadata: Record<string, unknown> | null;
     similarity: number;
   }>;
+}
+
+/**
+ * Get all reviewed/flagged documents that don't have embeddings yet.
+ * Used by the re-index operation.
+ */
+export async function getReviewedDocsWithoutEmbeddings(projectId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  // Find all reviewed/flagged docs that have no embedding
+  const results = await db
+    .select({
+      documentId: transcriptions.documentId,
+      transcriptionId: transcriptions.id,
+      reviewedJson: transcriptions.reviewedJson,
+      filename: documents.filename,
+    })
+    .from(transcriptions)
+    .innerJoin(documents, eq(documents.id, transcriptions.documentId))
+    .leftJoin(documentEmbeddings, eq(documentEmbeddings.documentId, transcriptions.documentId))
+    .where(
+      and(
+        eq(transcriptions.projectId, projectId),
+        or(
+          eq(documents.status, "reviewed"),
+          eq(documents.status, "flagged")
+        ),
+        // Only include docs with no embedding
+        sql`${documentEmbeddings.id} IS NULL`
+      )
+    );
+
+  return results;
 }
