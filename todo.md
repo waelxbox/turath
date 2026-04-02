@@ -125,3 +125,10 @@
 - [x] Add semantic search UI page in project workspace (search bar + ranked results with excerpts)
 - [x] Add "Generate for me" button for output schema in project settings (based on system prompt)
 - [x] Add "Generate for me" button for domain glossary in project settings (based on system prompt)
+## Bug Fixes (Round 10)
+- [x] Discovered text-embedding-004 is not available on this API key (404 on both v1 and v1beta)
+- [x] Switched to gemini-embedding-001 (3072 dimensions, v1beta endpoint) — confirmed working
+- [x] Updated drizzle/schema.ts vector column from 768 to 3072 dimensions
+- [x] Ran ALTER TABLE migration on Supabase to resize the embedding column
+- [x] 21 tests passing, zero TypeScript errors
+- [ ] Push to GitHub

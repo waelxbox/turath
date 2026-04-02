@@ -16,8 +16,8 @@ import {
   searchEmbeddings,
 } from "./db";
 
-const EMBEDDING_MODEL = "text-embedding-004";
-const EMBEDDING_DIMENSIONS = 768;
+const EMBEDDING_MODEL = "gemini-embedding-001";
+const EMBEDDING_DIMENSIONS = 3072;
 
 /**
  * Call Google AI Embedding API to get a vector for a text string.
@@ -28,7 +28,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
     throw new Error("GOOGLE_AI_API_KEY is not configured — cannot generate embeddings.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
 
   const response = await fetch(url, {
     method: "POST",
@@ -63,7 +63,7 @@ export async function getQueryEmbedding(text: string): Promise<number[]> {
     throw new Error("GOOGLE_AI_API_KEY is not configured — cannot generate embeddings.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
 
   const response = await fetch(url, {
     method: "POST",
