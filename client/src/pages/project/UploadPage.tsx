@@ -17,6 +17,40 @@ interface QueuedFile {
   error?: string;
 }
 
+/** Read a File as a base64 string (data URL split) */
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Limit concurrency to `limit` simultaneous promises */
+async function runWithConcurrency<T>(
+  tasks: (() => Promise<T>)[],
+  limit: number
+): Promise<PromiseSettledResult<T>[]> {
+  const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+  let idx = 0;
+
+  async function worker() {
+    while (idx < tasks.length) {
+      const i = idx++;
+      try {
+        results[i] = { status: "fulfilled", value: await tasks[i]() };
+      } catch (e) {
+        results[i] = { status: "rejected", reason: e };
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
 export default function UploadPage({ projectId, project }: Props) {
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -45,49 +79,63 @@ export default function UploadPage({ projectId, project }: Props) {
     setQueue(prev => [...prev, ...entries]);
   }, []);
 
-  const updateStatus = (id: string, status: QueuedFile["status"], error?: string) => {
+  const updateStatus = useCallback((id: string, status: QueuedFile["status"], error?: string) => {
     setQueue(prev => prev.map(q => q.id === id ? { ...q, status, error } : q));
-  };
+  }, []);
 
+  /**
+   * Process all queued files in parallel with a concurrency cap of 3.
+   * Each task: read base64 → upload → transcribe
+   */
   const processQueue = async () => {
     const pending = queue.filter(q => q.status === "queued");
     if (pending.length === 0) return;
     setIsProcessing(true);
 
-    for (const item of pending) {
-      try {
-        updateStatus(item.id, "uploading");
-        // Read file as base64
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(item.file);
-        });
+    const tasks = pending.map(item => async () => {
+      updateStatus(item.id, "uploading");
+      const base64 = await readFileAsBase64(item.file);
 
-        const doc = await uploadDoc.mutateAsync({
-          projectId,
-          filename: item.file.name,
-          fileBase64: base64,
-          mimeType: item.file.type,
-          fileSizeBytes: item.file.size,
-        });
+      const doc = await uploadDoc.mutateAsync({
+        projectId,
+        filename: item.file.name,
+        fileBase64: base64,
+        mimeType: item.file.type,
+        fileSizeBytes: item.file.size,
+      });
 
-        updateStatus(item.id, "transcribing");
+      updateStatus(item.id, "transcribing");
 
-        if (doc) {
-          await transcribeDoc.mutateAsync({ documentId: doc.id, projectId });
-        }
-
-        updateStatus(item.id, "done");
-      } catch (err) {
-        updateStatus(item.id, "error", err instanceof Error ? err.message : String(err));
+      if (doc) {
+        await transcribeDoc.mutateAsync({ documentId: doc.id, projectId });
       }
-    }
+
+      updateStatus(item.id, "done");
+    });
+
+    // Run up to 3 files simultaneously
+    const results = await runWithConcurrency(tasks, 3);
+
+    // Mark any failures
+    results.forEach((result, i) => {
+      if (result.status === "rejected") {
+        const err = result.reason;
+        updateStatus(pending[i].id, "error", err instanceof Error ? err.message : String(err));
+      }
+    });
+
+    const succeeded = results.filter(r => r.status === "fulfilled").length;
+    const failed = results.filter(r => r.status === "rejected").length;
 
     setIsProcessing(false);
     utils.projects.stats.invalidate({ id: projectId });
-    toast.success(`Processed ${pending.length} documents`);
+    utils.documents.list.invalidate({ projectId });
+
+    if (failed === 0) {
+      toast.success(`${succeeded} document${succeeded !== 1 ? "s" : ""} transcribed successfully`);
+    } else {
+      toast.warning(`${succeeded} succeeded, ${failed} failed`);
+    }
   };
 
   const clearDone = () => setQueue(prev => prev.filter(q => q.status !== "done"));
@@ -112,12 +160,15 @@ export default function UploadPage({ projectId, project }: Props) {
     }
   };
 
+  const queuedCount = queue.filter(q => q.status === "queued").length;
+  const processingCount = queue.filter(q => q.status === "uploading" || q.status === "transcribing").length;
+
   return (
     <div className="p-8">
       <div className="mb-8">
         <h2 className="text-2xl font-serif font-semibold mb-1">Upload documents</h2>
         <p className="text-muted-foreground text-sm">
-          Upload scanned document images. Each file will be uploaded and transcribed using your project's AI configuration.
+          Upload scanned document images. Up to 3 files are transcribed simultaneously using your project's AI configuration.
         </p>
       </div>
 
@@ -145,7 +196,15 @@ export default function UploadPage({ projectId, project }: Props) {
       {queue.length > 0 && (
         <div className="bg-card border border-border rounded-xl overflow-hidden mb-6">
           <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-            <h3 className="text-sm font-semibold">{queue.length} file{queue.length !== 1 ? "s" : ""} in queue</h3>
+            <div className="flex items-center gap-3">
+              <h3 className="text-sm font-semibold">{queue.length} file{queue.length !== 1 ? "s" : ""} in queue</h3>
+              {processingCount > 0 && (
+                <span className="text-xs text-primary flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  {processingCount} processing in parallel
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               {queue.some(q => q.status === "done") && (
                 <Button variant="ghost" size="sm" className="text-xs h-7" onClick={clearDone}>
@@ -175,10 +234,13 @@ export default function UploadPage({ projectId, project }: Props) {
 
       {/* Actions */}
       <div className="flex items-center gap-3">
-        {queue.filter(q => q.status === "queued").length > 0 && (
+        {queuedCount > 0 && (
           <Button onClick={processQueue} disabled={isProcessing} className="gap-2">
             {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-            {isProcessing ? "Processing…" : `Transcribe ${queue.filter(q => q.status === "queued").length} files`}
+            {isProcessing
+              ? `Processing… (${processingCount} active)`
+              : `Transcribe ${queuedCount} file${queuedCount !== 1 ? "s" : ""}`
+            }
           </Button>
         )}
         <Button
@@ -209,8 +271,8 @@ export default function UploadPage({ projectId, project }: Props) {
             <div>{project.jsonSchema ? Object.keys(project.jsonSchema as object).length : 0}</div>
           </div>
           <div>
-            <div className="text-xs text-muted-foreground mb-0.5">Temperature</div>
-            <div className="font-mono text-xs">{project.temperature}</div>
+            <div className="text-xs text-muted-foreground mb-0.5">Concurrency</div>
+            <div className="font-mono text-xs">3 parallel</div>
           </div>
         </div>
       </div>

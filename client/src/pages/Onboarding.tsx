@@ -29,7 +29,7 @@ interface SampleEntry {
 interface ValidationResult {
   aiOutput: Record<string, unknown>;
   score: number;
-  fieldComparisons: Array<{ field: string; expected: unknown; actual: unknown; match: boolean }>;
+  fieldComparisons: Array<{ field: string; expected: unknown; actual: unknown; match: boolean; similarity?: number }>;
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -445,35 +445,74 @@ export default function Onboarding() {
               </div>
             )}
 
-            {/* Field comparison table */}
+            {/* Field comparison — human-readable side-by-side diff */}
             <div className="bg-card border border-border rounded-xl overflow-hidden mb-6">
-              <div className="px-5 py-3 border-b border-border">
+              <div className="px-5 py-3 border-b border-border flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Field-by-field comparison</h3>
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-green-400" /> Match (≥70%)</span>
+                  <span className="flex items-center gap-1"><XCircle className="w-3 h-3 text-red-400" /> Mismatch</span>
+                </div>
+              </div>
+              {/* Column headers */}
+              <div className="grid grid-cols-12 gap-3 px-5 py-2 bg-muted/30 border-b border-border text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                <div className="col-span-2">Field</div>
+                <div className="col-span-1 text-center">Match</div>
+                <div className="col-span-4">Your manual transcription</div>
+                <div className="col-span-4">AI output</div>
+                <div className="col-span-1 text-right">Score</div>
               </div>
               <div className="divide-y divide-border">
-                {validationResult.fieldComparisons.map(fc => (
-                  <div key={fc.field} className="px-5 py-3 grid grid-cols-12 gap-4 items-start text-sm">
-                    <div className="col-span-2 font-mono text-xs text-muted-foreground pt-0.5">{fc.field}</div>
-                    <div className="col-span-1 flex justify-center pt-0.5">
-                      {fc.match
-                        ? <CheckCircle2 className="w-4 h-4 text-green-400" />
-                        : <XCircle className="w-4 h-4 text-red-400" />
-                      }
-                    </div>
-                    <div className="col-span-4">
-                      <div className="text-xs text-muted-foreground mb-0.5">Expected</div>
-                      <div className="text-xs bg-background rounded p-1.5 font-mono break-all">
-                        {JSON.stringify(fc.expected)}
+                {validationResult.fieldComparisons.map(fc => {
+                  // Format value as readable text (not raw JSON)
+                  const formatVal = (v: unknown): string => {
+                    if (v === null || v === undefined) return "—";
+                    if (typeof v === "string") return v || "(empty)";
+                    if (typeof v === "boolean") return v ? "Yes" : "No";
+                    if (Array.isArray(v)) return v.join(", ") || "(empty)";
+                    if (typeof v === "object") return Object.entries(v as Record<string, unknown>).map(([k, val]) => `${k}: ${val}`).join("\n");
+                    return String(v);
+                  };
+                  const pct = fc.similarity !== undefined ? Math.round(fc.similarity * 100) : (fc.match ? 100 : 0);
+                  const isLong = (formatVal(fc.expected).length > 80 || formatVal(fc.actual).length > 80);
+                  return (
+                    <div key={fc.field} className={`px-5 py-4 grid grid-cols-12 gap-3 items-start text-sm ${fc.match ? "" : "bg-red-500/5"}`}>
+                      <div className="col-span-2">
+                        <div className="font-mono text-xs text-muted-foreground break-all">{fc.field}</div>
+                      </div>
+                      <div className="col-span-1 flex justify-center pt-0.5">
+                        {fc.match
+                          ? <CheckCircle2 className="w-4 h-4 text-green-400" />
+                          : <XCircle className="w-4 h-4 text-red-400" />
+                        }
+                      </div>
+                      {/* Expected */}
+                      <div className="col-span-4">
+                        <div className={`text-sm rounded-lg p-3 bg-background border border-border leading-relaxed whitespace-pre-wrap break-words ${isLong ? "max-h-40 overflow-y-auto" : ""}`}>
+                          {formatVal(fc.expected)}
+                        </div>
+                      </div>
+                      {/* AI output */}
+                      <div className="col-span-4">
+                        <div className={`text-sm rounded-lg p-3 border leading-relaxed whitespace-pre-wrap break-words ${
+                          fc.match
+                            ? "bg-green-500/10 border-green-500/20"
+                            : "bg-red-500/10 border-red-500/20"
+                        } ${isLong ? "max-h-40 overflow-y-auto" : ""}`}>
+                          {formatVal(fc.actual)}
+                        </div>
+                      </div>
+                      {/* Similarity score */}
+                      <div className="col-span-1 flex justify-end pt-1">
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          pct >= 80 ? "bg-green-500/15 text-green-400" :
+                          pct >= 50 ? "bg-yellow-500/15 text-yellow-400" :
+                          "bg-red-500/15 text-red-400"
+                        }`}>{pct}%</span>
                       </div>
                     </div>
-                    <div className="col-span-5">
-                      <div className="text-xs text-muted-foreground mb-0.5">AI output</div>
-                      <div className={`text-xs rounded p-1.5 font-mono break-all ${fc.match ? "bg-green-500/10" : "bg-red-500/10"}`}>
-                        {JSON.stringify(fc.actual)}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 

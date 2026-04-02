@@ -84,3 +84,12 @@
 - [x] Fix review page: transcription metadata not loading/displaying
 - [x] Fix review page: verify document list, transcription fetch, and dynamic field rendering end-to-end
 - [x] Add skip-onboarding button: marks project active, navigates to Settings
+
+## Bug Fixes & Improvements (Round 4)
+- [x] Fix review page navigation — error when switching between document cards
+- [x] Fix Gemini 3.1 Pro API failure — removed (model not available on OpenAI-compat endpoint); using gemini-2.5-pro-preview-05-06 as top model
+- [x] Simplify model dropdown — 8 essential models with friendly labels grouped by family
+- [x] Fix batch transcription to fire all API calls in parallel (Promise.all, concurrency cap 3)
+- [x] Harden onboarding agent — always generate JSON schema + glossary from plain-text transcriptions
+- [x] Fix onboarding validation accuracy — fuzzy character-level similarity replaces strict JSON string compare
+- [x] Onboarding validation UI — human-readable side-by-side diff with per-field similarity % badges

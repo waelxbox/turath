@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useParams, useLocation } from "wouter";
+import { useState, useEffect, useCallback } from "react";
+import { useLocation } from "wouter";
 import type { Project } from "../../../../drizzle/schema";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -46,10 +46,6 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-/**
- * Flatten a potentially nested JSON schema into a flat list of renderable fields.
- * Nested objects are expanded with dot-notation keys (e.g. "structure.name").
- */
 function flattenSchema(
   schema: Record<string, SchemaField>,
   prefix = ""
@@ -67,7 +63,6 @@ function flattenSchema(
   return result;
 }
 
-/** Get a value from a (possibly nested) object using dot-notation key */
 function getNestedValue(obj: Record<string, unknown>, key: string): unknown {
   const parts = key.split(".");
   let cur: unknown = obj;
@@ -78,13 +73,324 @@ function getNestedValue(obj: Record<string, unknown>, key: string): unknown {
   return cur;
 }
 
-/** Set a value in a (possibly nested) object using dot-notation key, returning a new object */
 function setNestedValue(obj: Record<string, unknown>, key: string, value: unknown): Record<string, unknown> {
   const parts = key.split(".");
   if (parts.length === 1) return { ...obj, [key]: value };
   const [head, ...rest] = parts;
   const nested = (obj[head] ?? {}) as Record<string, unknown>;
   return { ...obj, [head]: setNestedValue(nested, rest.join("."), value) };
+}
+
+/**
+ * Inner component that is fully re-mounted when docId changes.
+ * This guarantees editedFields always starts fresh for each document.
+ */
+function ReviewDocPanel({
+  projectId,
+  project,
+  currentDocId,
+  documents,
+  currentIndex,
+  onNavigate,
+}: {
+  projectId: number;
+  project: Project;
+  currentDocId: number;
+  documents: Array<{ id: number; filename: string; status: string; errorMessage?: string | null }>;
+  currentIndex: number;
+  onNavigate: (docId: number) => void;
+}) {
+  const [editedFields, setEditedFields] = useState<Record<string, unknown>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const utils = trpc.useUtils();
+
+  const { data: transcription, refetch: refetchTranscription, isLoading: transcriptionLoading } =
+    trpc.transcriptions.getByDocument.useQuery(
+      { documentId: currentDocId, projectId },
+      { enabled: true }
+    );
+
+  const { data: imageData, isLoading: imageLoading } = trpc.documents.getImageUrl.useQuery(
+    { documentId: currentDocId, projectId },
+    { staleTime: 4 * 60 * 1000 }
+  );
+
+  const transcribeDoc = trpc.documents.transcribe.useMutation({
+    onSuccess: async (result) => {
+      if (result.success) {
+        toast.success("Transcription complete");
+        await refetchTranscription();
+        utils.documents.list.invalidate({ projectId });
+        utils.projects.stats.invalidate({ id: projectId });
+      } else {
+        toast.error(`Transcription failed: ${result.error}`);
+      }
+      setIsTranscribing(false);
+    },
+    onError: (err) => {
+      toast.error(err.message);
+      setIsTranscribing(false);
+    },
+  });
+
+  const saveReview = trpc.transcriptions.saveReview.useMutation({
+    onSuccess: () => {
+      toast.success("Saved");
+      utils.documents.list.invalidate({ projectId });
+      utils.projects.stats.invalidate({ id: projectId });
+      // Auto-advance to next document
+      if (currentIndex < documents.length - 1) {
+        onNavigate(documents[currentIndex + 1].id);
+      }
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const schema = project.jsonSchema as Record<string, SchemaField> | null;
+  const flatFields = schema ? flattenSchema(schema) : null;
+  const rawData = (transcription?.reviewedJson ?? transcription?.rawJson) as Record<string, unknown> | null;
+
+  // Populate editedFields once transcription loads — only once per mount (docId change re-mounts)
+  useEffect(() => {
+    if (rawData && Object.keys(editedFields).length === 0) {
+      setEditedFields({ ...rawData });
+    }
+  }, [rawData]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSave = useCallback(async (status: "reviewed" | "flagged") => {
+    if (!transcription) return;
+    setIsSaving(true);
+    try {
+      await saveReview.mutateAsync({
+        transcriptionId: transcription.id,
+        documentId: currentDocId,
+        projectId,
+        reviewedJson: editedFields,
+        status,
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [transcription, currentDocId, projectId, editedFields, saveReview]);
+
+  const handleTranscribe = useCallback(async () => {
+    setIsTranscribing(true);
+    await transcribeDoc.mutateAsync({ documentId: currentDocId, projectId });
+  }, [currentDocId, projectId, transcribeDoc]);
+
+  const currentDoc = documents.find(d => d.id === currentDocId);
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Doc header */}
+      <div className="flex items-center justify-between px-6 py-3 border-b border-border flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost" size="icon" className="h-7 w-7"
+              disabled={currentIndex <= 0}
+              onClick={() => documents[currentIndex - 1] && onNavigate(documents[currentIndex - 1].id)}
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            <span className="text-xs text-muted-foreground">{currentIndex + 1} / {documents.length}</span>
+            <Button
+              variant="ghost" size="icon" className="h-7 w-7"
+              disabled={currentIndex >= documents.length - 1}
+              onClick={() => documents[currentIndex + 1] && onNavigate(documents[currentIndex + 1].id)}
+            >
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+          <span className="text-sm font-medium">{currentDoc?.filename}</span>
+          {currentDoc && <StatusBadge status={currentDoc.status} />}
+        </div>
+        <div className="flex items-center gap-2">
+          {transcription && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 bg-transparent border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                onClick={() => handleSave("flagged")}
+                disabled={isSaving}
+              >
+                {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
+                Flag
+              </Button>
+              <Button
+                size="sm"
+                className="gap-1.5"
+                onClick={() => handleSave("reviewed")}
+                disabled={isSaving}
+              >
+                {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                Mark reviewed
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Split view */}
+      <div className="flex-1 overflow-hidden flex">
+        {/* Image panel */}
+        <div className="w-1/2 border-r border-border overflow-auto p-4 bg-black/20 flex items-start justify-center">
+          {imageLoading ? (
+            <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
+              <Loader2 className="w-6 h-6 animate-spin" />
+              <span className="text-xs">Loading image…</span>
+            </div>
+          ) : imageData?.url ? (
+            <img
+              src={imageData.url}
+              alt={currentDoc?.filename}
+              className="w-full rounded shadow-lg"
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
+              <ImageOff className="w-8 h-8" />
+              <span className="text-xs">Image not available</span>
+            </div>
+          )}
+        </div>
+
+        {/* Form / transcription panel */}
+        <div className="w-1/2 overflow-auto p-6">
+          {/* Not yet transcribed */}
+          {!transcriptionLoading && !transcription && currentDoc?.status !== "error" && (
+            <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
+              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                <Zap className="w-6 h-6 text-primary" />
+              </div>
+              <div>
+                <p className="font-medium mb-1">Not yet transcribed</p>
+                <p className="text-sm text-muted-foreground">
+                  Run the AI transcription engine on this document to extract its metadata.
+                </p>
+              </div>
+              <Button onClick={handleTranscribe} disabled={isTranscribing} className="gap-2">
+                {isTranscribing
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Transcribing…</>
+                  : <><Zap className="w-4 h-4" /> Transcribe now</>
+                }
+              </Button>
+            </div>
+          )}
+
+          {/* Loading */}
+          {transcriptionLoading && (
+            <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+              <p className="text-sm">Loading transcription…</p>
+            </div>
+          )}
+
+          {/* Error state */}
+          {!transcriptionLoading && currentDoc?.status === "error" && !transcription && (
+            <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
+              <AlertCircle className="w-8 h-8 text-destructive" />
+              <p className="text-sm text-destructive">Transcription failed</p>
+              {currentDoc.errorMessage && (
+                <p className="text-xs text-muted-foreground font-mono bg-secondary rounded p-2 max-w-xs">
+                  {currentDoc.errorMessage}
+                </p>
+              )}
+              <Button variant="outline" size="sm" onClick={handleTranscribe} disabled={isTranscribing} className="gap-2">
+                {isTranscribing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                Retry
+              </Button>
+            </div>
+          )}
+
+          {/* Transcription loaded */}
+          {!transcriptionLoading && transcription && (
+            <div className="space-y-5">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground pb-3 border-b border-border flex-wrap">
+                <span>Model: <span className="font-mono">{transcription.modelUsed}</span></span>
+                {transcription.reviewedAt && (
+                  <span>· Reviewed {new Date(transcription.reviewedAt).toLocaleDateString()}</span>
+                )}
+              </div>
+
+              {transcription.originalText && (
+                <div>
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wide mb-2 block">
+                    Original transcription (pass 1)
+                  </Label>
+                  <div className="bg-background rounded-lg p-3 text-sm font-mono text-muted-foreground max-h-32 overflow-y-auto whitespace-pre-wrap">
+                    {transcription.originalText}
+                  </div>
+                </div>
+              )}
+
+              {flatFields && flatFields.length > 0 ? (
+                flatFields.map(({ key, label, def }) => (
+                  <DynamicField
+                    key={key}
+                    fieldKey={key}
+                    label={label}
+                    fieldDef={def}
+                    value={getNestedValue(editedFields, key)}
+                    onChange={v => setEditedFields(prev => setNestedValue(prev, key, v))}
+                  />
+                ))
+              ) : (
+                rawData && Object.entries(rawData)
+                  .filter(([k]) => !k.startsWith("_"))
+                  .map(([key, val]) => (
+                    <div key={key}>
+                      <Label className="text-sm mb-1.5 block capitalize">{key.replace(/_/g, " ")}</Label>
+                      {typeof val === "object" && val !== null ? (
+                        <Textarea
+                          value={JSON.stringify(val, null, 2)}
+                          onChange={e => {
+                            try {
+                              setEditedFields(prev => ({ ...prev, [key]: JSON.parse(e.target.value) }));
+                            } catch { /* ignore parse error while typing */ }
+                          }}
+                          className="bg-background text-xs font-mono resize-none"
+                          rows={4}
+                        />
+                      ) : (
+                        <Input
+                          value={String(val ?? "")}
+                          onChange={e => setEditedFields(prev => ({ ...prev, [key]: e.target.value }))}
+                          className="bg-background text-sm"
+                        />
+                      )}
+                    </div>
+                  ))
+              )}
+
+              <div className="flex gap-2 pt-4 border-t border-border sticky bottom-0 bg-card/95 backdrop-blur-sm py-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 bg-transparent border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                  onClick={() => handleSave("flagged")}
+                  disabled={isSaving}
+                >
+                  {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
+                  Flag for review
+                </Button>
+                <Button
+                  size="sm"
+                  className="gap-1.5 flex-1"
+                  onClick={() => handleSave("reviewed")}
+                  disabled={isSaving}
+                >
+                  {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                  Save & mark reviewed
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function DynamicField({
@@ -182,98 +488,26 @@ function DynamicField({
 }
 
 export default function ReviewPage({ projectId, project, docId: docIdProp }: Props) {
-  const { docId: docIdParam } = useParams<{ docId: string }>();
-  const docId = docIdProp ?? docIdParam;
   const [, navigate] = useLocation();
-  // Default to showing all statuses so users don't get confused by empty list
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [editedFields, setEditedFields] = useState<Record<string, unknown>>({});
-  const [isSaving, setIsSaving] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
 
-  const { data: documents, refetch: refetchDocs } = trpc.documents.list.useQuery({
+  const { data: documents } = trpc.documents.list.useQuery({
     projectId,
     status: statusFilter === "all"
       ? undefined
       : statusFilter as "needs_review" | "reviewed" | "flagged" | "pending" | "processing" | "error",
   });
 
-  const currentDocId = docId ? parseInt(docId) : documents?.[0]?.id;
+  // Determine active document
+  const currentDocId = docIdProp
+    ? parseInt(docIdProp)
+    : documents?.[0]?.id;
+
   const currentIndex = documents?.findIndex(d => d.id === currentDocId) ?? 0;
 
-  const { data: transcription, refetch: refetchTranscription, isLoading: transcriptionLoading } =
-    trpc.transcriptions.getByDocument.useQuery(
-      { documentId: currentDocId ?? 0, projectId },
-      { enabled: !!currentDocId }
-    );
-
-  // Fresh presigned image URL (stored URLs expire)
-  const { data: imageData, isLoading: imageLoading } = trpc.documents.getImageUrl.useQuery(
-    { documentId: currentDocId ?? 0, projectId },
-    { enabled: !!currentDocId, staleTime: 4 * 60 * 1000 } // re-fetch every 4 min
-  );
-
-  const transcribeDoc = trpc.documents.transcribe.useMutation({
-    onSuccess: async (result) => {
-      if (result.success) {
-        toast.success("Transcription complete");
-        await refetchDocs();
-        await refetchTranscription();
-      } else {
-        toast.error(`Transcription failed: ${result.error}`);
-      }
-      setIsTranscribing(false);
-    },
-    onError: (err) => {
-      toast.error(err.message);
-      setIsTranscribing(false);
-    },
-  });
-
-  const saveReview = trpc.transcriptions.saveReview.useMutation({
-    onSuccess: () => {
-      toast.success("Saved");
-      refetchDocs();
-      refetchTranscription();
-      // Auto-advance to next document
-      if (documents && currentIndex < documents.length - 1) {
-        const next = documents[currentIndex + 1];
-        navigate(`/projects/${projectId}/review/${next.id}`);
-      }
-    },
-    onError: (err) => toast.error(err.message),
-  });
-
-  const schema = project.jsonSchema as Record<string, SchemaField> | null;
-  const flatFields = schema ? flattenSchema(schema) : null;
-  const rawData = (transcription?.reviewedJson ?? transcription?.rawJson) as Record<string, unknown> | null;
-
-  useEffect(() => {
-    if (rawData) {
-      setEditedFields({ ...rawData });
-    }
-  }, [transcription?.id]);
-
-  const handleSave = async (status: "reviewed" | "flagged") => {
-    if (!transcription || !currentDocId) return;
-    setIsSaving(true);
-    await saveReview.mutateAsync({
-      transcriptionId: transcription.id,
-      documentId: currentDocId,
-      projectId,
-      reviewedJson: editedFields,
-      status,
-    });
-    setIsSaving(false);
+  const handleNavigate = (docId: number) => {
+    navigate(`/projects/${projectId}/review/${docId}`);
   };
-
-  const handleTranscribe = async () => {
-    if (!currentDocId) return;
-    setIsTranscribing(true);
-    await transcribeDoc.mutateAsync({ documentId: currentDocId, projectId });
-  };
-
-  const currentDoc = documents?.find(d => d.id === currentDocId);
 
   return (
     <div className="flex h-full">
@@ -304,7 +538,7 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
             documents.map(doc => (
               <button
                 key={doc.id}
-                onClick={() => navigate(`/projects/${projectId}/review/${doc.id}`)}
+                onClick={() => handleNavigate(doc.id)}
                 className={`w-full text-left px-3 py-2.5 hover:bg-secondary/50 transition-colors ${doc.id === currentDocId ? "bg-secondary" : ""}`}
               >
                 <div className="text-xs font-medium truncate mb-1">{doc.filename}</div>
@@ -320,7 +554,7 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
 
       {/* Main review area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {!currentDoc ? (
+        {!currentDocId || !documents || documents.length === 0 ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <Eye className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
@@ -328,227 +562,21 @@ export default function ReviewPage({ projectId, project, docId: docIdProp }: Pro
             </div>
           </div>
         ) : (
-          <>
-            {/* Doc header */}
-            <div className="flex items-center justify-between px-6 py-3 border-b border-border flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost" size="icon" className="h-7 w-7"
-                    disabled={currentIndex <= 0}
-                    onClick={() => {
-                      if (documents && currentIndex > 0)
-                        navigate(`/projects/${projectId}/review/${documents[currentIndex - 1].id}`);
-                    }}
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-                  <span className="text-xs text-muted-foreground">{currentIndex + 1} / {documents?.length ?? 0}</span>
-                  <Button
-                    variant="ghost" size="icon" className="h-7 w-7"
-                    disabled={!documents || currentIndex >= documents.length - 1}
-                    onClick={() => {
-                      if (documents && currentIndex < documents.length - 1)
-                        navigate(`/projects/${projectId}/review/${documents[currentIndex + 1].id}`);
-                    }}
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </div>
-                <span className="text-sm font-medium">{currentDoc.filename}</span>
-                <StatusBadge status={currentDoc.status} />
-              </div>
-              <div className="flex items-center gap-2">
-                {transcription && (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 bg-transparent border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
-                      onClick={() => handleSave("flagged")}
-                      disabled={isSaving}
-                    >
-                      {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
-                      Flag
-                    </Button>
-                    <Button
-                      size="sm"
-                      className="gap-1.5"
-                      onClick={() => handleSave("reviewed")}
-                      disabled={isSaving}
-                    >
-                      {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                      Mark reviewed
-                    </Button>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Split view */}
-            <div className="flex-1 overflow-hidden flex">
-              {/* Image panel */}
-              <div className="w-1/2 border-r border-border overflow-auto p-4 bg-black/20 flex items-start justify-center">
-                {imageLoading ? (
-                  <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                    <span className="text-xs">Loading image…</span>
-                  </div>
-                ) : imageData?.url ? (
-                  <img
-                    src={imageData.url}
-                    alt={currentDoc.filename}
-                    className="w-full rounded shadow-lg"
-                  />
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground">
-                    <ImageOff className="w-8 h-8" />
-                    <span className="text-xs">Image not available</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Form / transcription panel */}
-              <div className="w-1/2 overflow-auto p-6">
-                {/* Case 1: Document not yet transcribed */}
-                {!transcriptionLoading && !transcription && (
-                  <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
-                    <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                      <Zap className="w-6 h-6 text-primary" />
-                    </div>
-                    <div>
-                      <p className="font-medium mb-1">Not yet transcribed</p>
-                      <p className="text-sm text-muted-foreground">
-                        Run the AI transcription engine on this document to extract its metadata.
-                      </p>
-                    </div>
-                    <Button onClick={handleTranscribe} disabled={isTranscribing} className="gap-2">
-                      {isTranscribing
-                        ? <><Loader2 className="w-4 h-4 animate-spin" /> Transcribing…</>
-                        : <><Zap className="w-4 h-4" /> Transcribe now</>
-                      }
-                    </Button>
-                  </div>
-                )}
-
-                {/* Case 2: Currently transcribing */}
-                {(transcriptionLoading || (isTranscribing && !transcription)) && (
-                  <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
-                    <Loader2 className="w-6 h-6 animate-spin text-primary" />
-                    <p className="text-sm">Loading transcription…</p>
-                  </div>
-                )}
-
-                {/* Case 3: Error state */}
-                {!transcriptionLoading && currentDoc.status === "error" && !transcription && (
-                  <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
-                    <AlertCircle className="w-8 h-8 text-destructive" />
-                    <p className="text-sm text-destructive">Transcription failed</p>
-                    {currentDoc.errorMessage && (
-                      <p className="text-xs text-muted-foreground font-mono bg-secondary rounded p-2 max-w-xs">
-                        {currentDoc.errorMessage}
-                      </p>
-                    )}
-                    <Button variant="outline" size="sm" onClick={handleTranscribe} disabled={isTranscribing} className="gap-2">
-                      {isTranscribing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                      Retry
-                    </Button>
-                  </div>
-                )}
-
-                {/* Case 4: Transcription loaded — show editable fields */}
-                {!transcriptionLoading && transcription && (
-                  <div className="space-y-5">
-                    {/* Model info */}
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground pb-3 border-b border-border flex-wrap">
-                      <span>Model: <span className="font-mono">{transcription.modelUsed}</span></span>
-                      {transcription.reviewedAt && (
-                        <span>· Reviewed {new Date(transcription.reviewedAt).toLocaleDateString()}</span>
-                      )}
-                    </div>
-
-                    {/* Original text (two-pass) */}
-                    {transcription.originalText && (
-                      <div>
-                        <Label className="text-xs text-muted-foreground uppercase tracking-wide mb-2 block">
-                          Original transcription (pass 1)
-                        </Label>
-                        <div className="bg-background rounded-lg p-3 text-sm font-mono text-muted-foreground max-h-32 overflow-y-auto whitespace-pre-wrap">
-                          {transcription.originalText}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Dynamic schema fields (flattened, including nested objects) */}
-                    {flatFields && flatFields.length > 0 ? (
-                      flatFields.map(({ key, label, def }) => (
-                        <DynamicField
-                          key={key}
-                          fieldKey={key}
-                          label={label}
-                          fieldDef={def}
-                          value={getNestedValue(editedFields, key)}
-                          onChange={v => setEditedFields(prev => setNestedValue(prev, key, v))}
-                        />
-                      ))
-                    ) : (
-                      // Fallback: render all non-private raw JSON fields
-                      rawData && Object.entries(rawData)
-                        .filter(([k]) => !k.startsWith("_"))
-                        .map(([key, val]) => (
-                          <div key={key}>
-                            <Label className="text-sm mb-1.5 block capitalize">{key.replace(/_/g, " ")}</Label>
-                            {typeof val === "object" && val !== null ? (
-                              <Textarea
-                                value={JSON.stringify(val, null, 2)}
-                                onChange={e => {
-                                  try {
-                                    setEditedFields(prev => ({ ...prev, [key]: JSON.parse(e.target.value) }));
-                                  } catch {
-                                    // ignore parse error while typing
-                                  }
-                                }}
-                                className="bg-background text-xs font-mono resize-none"
-                                rows={4}
-                              />
-                            ) : (
-                              <Input
-                                value={String(val ?? "")}
-                                onChange={e => setEditedFields(prev => ({ ...prev, [key]: e.target.value }))}
-                                className="bg-background text-sm"
-                              />
-                            )}
-                          </div>
-                        ))
-                    )}
-
-                    {/* Save buttons at bottom */}
-                    <div className="flex gap-2 pt-4 border-t border-border sticky bottom-0 bg-card/95 backdrop-blur-sm py-3">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5 bg-transparent border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
-                        onClick={() => handleSave("flagged")}
-                        disabled={isSaving}
-                      >
-                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
-                        Flag for review
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="gap-1.5 flex-1"
-                        onClick={() => handleSave("reviewed")}
-                        disabled={isSaving}
-                      >
-                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                        Save & mark reviewed
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
+          /**
+           * KEY is set to currentDocId so React fully re-mounts ReviewDocPanel
+           * whenever the user navigates to a different document.
+           * This guarantees editedFields is always fresh and never carries over
+           * stale data from the previous card.
+           */
+          <ReviewDocPanel
+            key={currentDocId}
+            projectId={projectId}
+            project={project}
+            currentDocId={currentDocId}
+            documents={documents}
+            currentIndex={currentIndex}
+            onNavigate={handleNavigate}
+          />
         )}
       </div>
     </div>

@@ -13,17 +13,17 @@ import { ENV } from "./_core/env";
 import type { InvokeParams, InvokeResult } from "./_core/llm";
 
 // Known Gemini model IDs — kept in sync with the frontend dropdown
+// Use the OpenAI-compat endpoint: https://generativelanguage.googleapis.com/v1beta/openai/
 export const GEMINI_MODELS = new Set([
-  "gemini-3.1-pro-preview-03-25",
-  "gemini-3.1-flash-preview-03-25",
+  // Gemini 2.5 family (stable + preview)
+  "gemini-2.5-pro-preview-05-06",
   "gemini-2.5-pro",
-  "gemini-2.5-pro-preview-06-05",
-  "gemini-2.5-flash",
   "gemini-2.5-flash-preview-04-17",
+  "gemini-2.5-flash",
+  // Gemini 2.0 family
   "gemini-2.0-flash",
-  "gemini-2.0-flash-lite",
+  // Gemini 1.5 family
   "gemini-1.5-pro",
-  "gemini-1.5-flash",
 ]);
 
 export function isGeminiModel(modelName: string): boolean {
