@@ -99,3 +99,6 @@
 
 ## Bug Fixes & Improvements (Round 6)
 - [x] Fix review page routing — rewrote ProjectWorkspace to use <Router base="/projects/:id"> so all child routes are relative; fixed all absolute navigate() calls in ReviewPage and ProjectOverview to use relative paths; fixed back-to-dashboard button to use window.location.href
+
+## Bug Fixes & Improvements (Round 7)
+- [x] Fix routing 404 — root cause was wrong wildcard syntax in App.tsx: regexparam v3 requires /projects/:id/* not /projects/:id/:rest* (which never matched). Verified all 7 URL patterns now route correctly.

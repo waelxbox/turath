@@ -15,8 +15,8 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/projects/:id/onboarding" component={Onboarding} />
-      {/* All project sub-routes handled inside ProjectWorkspace via nested Switch */}
-      <Route path="/projects/:id/:rest*" component={ProjectWorkspace} />
+      {/* All project sub-routes handled inside ProjectWorkspace via nested Router base */}
+      <Route path="/projects/:id/*" component={ProjectWorkspace} />
       <Route path="/projects/:id" component={ProjectWorkspace} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
