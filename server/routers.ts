@@ -102,6 +102,82 @@ const projectsRouter = router({
       if (!stats) throw new TRPCError({ code: "NOT_FOUND" });
       return stats;
     }),
+
+  /**
+   * Generate a JSON schema for the project based on the current system prompt.
+   * Returns a ready-to-use JSON object the user can paste into the schema field.
+   */
+  generateSchema: protectedProcedure
+    .input(z.object({
+      id: z.number(),
+      systemPrompt: z.string().min(10).max(8000),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.id, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const response = await invokeLLM({
+        messages: [
+          {
+            role: "system",
+            content: `You are an expert archival data modeller. Given a transcription system prompt, generate a JSON schema object that defines the fields the AI should extract from documents. Each key should be a field name (camelCase), and each value should be an object with: type ("string"|"number"|"boolean"|"array"), description (a short explanation), nullable (true/false), and optionally displayHint ("short_text"|"long_text"|"tag_list"). Return ONLY valid JSON, no markdown, no explanation.`,
+          },
+          {
+            role: "user",
+            content: `System prompt:\n${input.systemPrompt}\n\nGenerate the output JSON schema:`,
+          },
+        ],
+        response_format: { type: "json_object" },
+      });
+
+      const raw = response.choices[0]?.message?.content;
+      if (!raw) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "LLM returned empty response" });
+
+      try {
+        const parsed = JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw));
+        return { schema: parsed };
+      } catch {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "LLM returned invalid JSON" });
+      }
+    }),
+
+  /**
+   * Generate a domain glossary for the project based on the current system prompt.
+   * Returns a flat key-value JSON object of domain terms and their definitions.
+   */
+  generateGlossary: protectedProcedure
+    .input(z.object({
+      id: z.number(),
+      systemPrompt: z.string().min(10).max(8000),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.id, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const response = await invokeLLM({
+        messages: [
+          {
+            role: "system",
+            content: `You are an expert in historical and archival linguistics. Given a transcription system prompt, generate a domain glossary as a flat JSON object where each key is a domain-specific term (e.g. an Arabic word, a technical term, an abbreviation) and each value is a short English definition or translation. Include 10-25 relevant terms. Return ONLY valid JSON, no markdown, no explanation.`,
+          },
+          {
+            role: "user",
+            content: `System prompt:\n${input.systemPrompt}\n\nGenerate the domain glossary:`,
+          },
+        ],
+        response_format: { type: "json_object" },
+      });
+
+      const raw = response.choices[0]?.message?.content;
+      if (!raw) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "LLM returned empty response" });
+
+      try {
+        const parsed = JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw));
+        return { glossary: parsed };
+      } catch {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "LLM returned invalid JSON" });
+      }
+    }),
 });
 
 // ─── Onboarding Router ────────────────────────────────────────────────────────

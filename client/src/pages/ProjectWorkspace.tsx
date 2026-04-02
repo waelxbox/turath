@@ -2,7 +2,7 @@ import { useParams, useLocation, Router, Route, Switch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
-import { Loader2, BookOpen, Upload, Eye, Download, Settings, ArrowLeft, ChevronRight, MessageSquare } from "lucide-react";
+import { Loader2, BookOpen, Upload, Eye, Download, Settings, ArrowLeft, ChevronRight, MessageSquare, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadPage from "./project/UploadPage";
 import ReviewPage from "./project/ReviewPage";
@@ -10,11 +10,13 @@ import ExportPage from "./project/ExportPage";
 import ProjectSettings from "./project/ProjectSettings";
 import ProjectOverview from "./project/ProjectOverview";
 import SemanticChatPage from "./project/SemanticChatPage";
+import SemanticSearchPage from "./project/SemanticSearchPage";
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview",    icon: BookOpen,      path: "/" },
   { id: "upload",   label: "Upload",      icon: Upload,        path: "/upload" },
   { id: "review",   label: "Review",      icon: Eye,           path: "/review" },
+  { id: "search",   label: "Search",      icon: Search,        path: "/search" },
   { id: "chat",     label: "Ask Archive", icon: MessageSquare, path: "/chat" },
   { id: "export",   label: "Export",      icon: Download,      path: "/export" },
   { id: "settings", label: "Settings",    icon: Settings,      path: "/settings" },
@@ -149,6 +151,10 @@ function WorkspaceInner({
             {/* review queue (no specific doc) */}
             <Route path="/review">
               <ReviewPage projectId={projectId} project={project} />
+            </Route>
+            {/* semantic search */}
+            <Route path="/search">
+              <SemanticSearchPage projectId={projectId} project={project} />
             </Route>
             {/* semantic chat */}
             <Route path="/chat">

@@ -28,7 +28,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
     throw new Error("GOOGLE_AI_API_KEY is not configured — cannot generate embeddings.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
 
   const response = await fetch(url, {
     method: "POST",
@@ -63,7 +63,7 @@ export async function getQueryEmbedding(text: string): Promise<number[]> {
     throw new Error("GOOGLE_AI_API_KEY is not configured — cannot generate embeddings.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
 
   const response = await fetch(url, {
     method: "POST",

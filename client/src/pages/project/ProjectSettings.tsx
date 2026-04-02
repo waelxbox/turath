@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
-import { Loader2, Save, AlertTriangle } from "lucide-react";
+import { Loader2, Save, AlertTriangle, Sparkles } from "lucide-react";
 
 interface Props {
   projectId: number;
@@ -34,6 +34,26 @@ export default function ProjectSettings({ projectId, project }: Props) {
   );
   const [jsonSchemaValid, setJsonSchemaValid] = useState(true);
   const [glossaryValid, setGlossaryValid] = useState(true);
+
+  const generateSchema = trpc.projects.generateSchema.useMutation({
+    onSuccess: (data) => {
+      const pretty = JSON.stringify(data.schema, null, 2);
+      setJsonSchemaStr(pretty);
+      setJsonSchemaValid(true);
+      toast.success("Schema generated — review and save when ready");
+    },
+    onError: (err) => toast.error(`Schema generation failed: ${err.message}`),
+  });
+
+  const generateGlossary = trpc.projects.generateGlossary.useMutation({
+    onSuccess: (data) => {
+      const pretty = JSON.stringify(data.glossary, null, 2);
+      setGlossaryStr(pretty);
+      setGlossaryValid(true);
+      toast.success("Glossary generated — review and save when ready");
+    },
+    onError: (err) => toast.error(`Glossary generation failed: ${err.message}`),
+  });
 
   const updateProject = trpc.projects.update.useMutation({
     onSuccess: () => {
@@ -211,7 +231,21 @@ export default function ProjectSettings({ projectId, project }: Props) {
 
         {/* JSON Schema */}
         <section className="border-t border-border pt-8">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Output JSON schema</h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Output JSON schema</h3>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs h-7"
+              disabled={generateSchema.isPending || !systemPrompt.trim()}
+              onClick={() => generateSchema.mutate({ id: projectId, systemPrompt })}
+            >
+              {generateSchema.isPending
+                ? <Loader2 className="w-3 h-3 animate-spin" />
+                : <Sparkles className="w-3 h-3" />}
+              Generate for me
+            </Button>
+          </div>
           <p className="text-xs text-muted-foreground mb-4">
             Defines the fields the AI should extract. Each key maps to a field definition with <code className="bg-secondary px-1 rounded">type</code> and optional <code className="bg-secondary px-1 rounded">description</code>.
           </p>
@@ -229,7 +263,21 @@ export default function ProjectSettings({ projectId, project }: Props) {
 
         {/* Glossary */}
         <section className="border-t border-border pt-8">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Domain glossary</h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Domain glossary</h3>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs h-7"
+              disabled={generateGlossary.isPending || !systemPrompt.trim()}
+              onClick={() => generateGlossary.mutate({ id: projectId, systemPrompt })}
+            >
+              {generateGlossary.isPending
+                ? <Loader2 className="w-3 h-3 animate-spin" />
+                : <Sparkles className="w-3 h-3" />}
+              Generate for me
+            </Button>
+          </div>
           <p className="text-xs text-muted-foreground mb-4">
             Key-value pairs of domain-specific terms injected into the system prompt. Format: <code className="bg-secondary px-1 rounded">"term": "definition or translation"</code>.
           </p>

@@ -119,3 +119,9 @@
 - [x] Add Ask Archive nav item to project workspace sidebar
 - [x] Update tests: 21 vitest tests passing (added 4 RAG tests)
 - [ ] Push to GitHub and deploy
+
+## Bug Fixes & Features (Round 9)
+- [x] Fix embedding API 404 — switch from v1beta to v1 endpoint for text-embedding-004
+- [x] Add semantic search UI page in project workspace (search bar + ranked results with excerpts)
+- [x] Add "Generate for me" button for output schema in project settings (based on system prompt)
+- [x] Add "Generate for me" button for domain glossary in project settings (based on system prompt)
