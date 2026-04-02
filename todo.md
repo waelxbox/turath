@@ -93,3 +93,6 @@
 - [x] Harden onboarding agent — always generate JSON schema + glossary from plain-text transcriptions
 - [x] Fix onboarding validation accuracy — fuzzy character-level similarity replaces strict JSON string compare
 - [x] Onboarding validation UI — human-readable side-by-side diff with per-field similarity % badges
+
+## Bug Fixes & Improvements (Round 5)
+- [x] Add Gemini 3.1 Pro to model dropdown and make it work — correct model ID is gemini-3.1-pro-preview (verified from SelimHassan settings.py); also added gemini-3-flash-preview

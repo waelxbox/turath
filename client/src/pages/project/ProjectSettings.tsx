@@ -128,11 +128,13 @@ export default function ProjectSettings({ projectId, project }: Props) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {/* Gemini 2.5 — best for archival document transcription */}
-                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Gemini 2.5 (Recommended)</div>
-                  <SelectItem value="gemini-2.5-pro-preview-05-06">Gemini 2.5 Pro Preview — Most capable</SelectItem>
+                  {/* Gemini 3 — latest generation */}
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Gemini 3 (Latest)</div>
+                  <SelectItem value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview ✔ — Most advanced</SelectItem>
+                  <SelectItem value="gemini-3-flash-preview">Gemini 3 Flash Preview — Fast &amp; capable</SelectItem>
+                  {/* Gemini 2.5 */}
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Gemini 2.5</div>
                   <SelectItem value="gemini-2.5-pro">Gemini 2.5 Pro — Stable</SelectItem>
-                  <SelectItem value="gemini-2.5-flash-preview-04-17">Gemini 2.5 Flash Preview — Fast</SelectItem>
                   <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash — Fast &amp; stable</SelectItem>
                   {/* Gemini 2.0 */}
                   <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Gemini 2.0</div>
