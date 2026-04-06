@@ -262,6 +262,12 @@ export async function createEmbedding(data: InsertDocumentEmbedding) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(documentEmbeddings).values(data).returning();
+  // Populate tsvector for full-text search
+  if (result[0]?.id) {
+    await db.execute(
+      sql`UPDATE document_embeddings SET content_tsv = to_tsvector('simple', ${data.content}) WHERE id = ${result[0].id}`
+    );
+  }
   return result[0];
 }
 
@@ -272,12 +278,17 @@ export async function deleteEmbeddingsByDocumentId(documentId: number) {
 }
 
 /**
- * Semantic similarity search using pgvector cosine distance.
+ * Hybrid search: combines pgvector cosine similarity (semantic) with
+ * Postgres Full-Text Search (keyword) using Reciprocal Rank Fusion (RRF).
  * Strictly scoped to projectId for tenant isolation.
+ *
+ * RRF formula: score = 1/(k + rank_vector) + 1/(k + rank_fts)
+ * where k=60 is the standard constant that dampens the impact of high ranks.
  */
 export async function searchEmbeddings(
   projectId: number,
   queryEmbedding: number[],
+  queryText: string,
   limit = 5
 ): Promise<Array<{
   id: string;
@@ -286,22 +297,84 @@ export async function searchEmbeddings(
   content: string;
   metadata: Record<string, unknown> | null;
   similarity: number;
+  matchType: string;
 }>> {
   const db = await getDb();
   if (!db) return [];
   const vectorStr = `[${queryEmbedding.join(",")}]`;
+  // Convert query to tsquery (simple config handles multilingual/non-English text better)
+  // Use websearch_to_tsquery for natural language queries
   const results = await db.execute(
     sql`
+      WITH
+      -- Vector search: rank by cosine distance
+      vector_search AS (
+        SELECT
+          de.id::text,
+          de."documentId",
+          de."transcriptionId",
+          de.content,
+          de.metadata,
+          1 - (de.embedding <=> ${vectorStr}::vector) AS vector_score,
+          ROW_NUMBER() OVER (ORDER BY de.embedding <=> ${vectorStr}::vector) AS vector_rank
+        FROM document_embeddings de
+        WHERE de."projectId" = ${projectId}
+          AND de.embedding IS NOT NULL
+        LIMIT 20
+      ),
+      -- Full-text search: rank by ts_rank
+      fts_search AS (
+        SELECT
+          de.id::text,
+          de."documentId",
+          de."transcriptionId",
+          de.content,
+          de.metadata,
+          ts_rank(de.content_tsv, websearch_to_tsquery('simple', ${queryText})) AS fts_score,
+          ROW_NUMBER() OVER (
+            ORDER BY ts_rank(de.content_tsv, websearch_to_tsquery('simple', ${queryText})) DESC
+          ) AS fts_rank
+        FROM document_embeddings de
+        WHERE de."projectId" = ${projectId}
+          AND de.content_tsv @@ websearch_to_tsquery('simple', ${queryText})
+        LIMIT 20
+      ),
+      -- Merge both result sets
+      all_ids AS (
+        SELECT id FROM vector_search
+        UNION
+        SELECT id FROM fts_search
+      ),
+      -- RRF fusion: k=60 is the standard constant
+      rrf AS (
+        SELECT
+          a.id,
+          COALESCE(v."documentId", f."documentId") AS "documentId",
+          COALESCE(v."transcriptionId", f."transcriptionId") AS "transcriptionId",
+          COALESCE(v.content, f.content) AS content,
+          COALESCE(v.metadata, f.metadata) AS metadata,
+          COALESCE(1.0 / (60 + v.vector_rank), 0) +
+          COALESCE(1.0 / (60 + f.fts_rank), 0) AS rrf_score,
+          COALESCE(v.vector_score, 0) AS vector_score,
+          CASE
+            WHEN v.id IS NOT NULL AND f.id IS NOT NULL THEN 'hybrid'
+            WHEN v.id IS NOT NULL THEN 'semantic'
+            ELSE 'keyword'
+          END AS match_type
+        FROM all_ids a
+        LEFT JOIN vector_search v ON v.id = a.id
+        LEFT JOIN fts_search f ON f.id = a.id
+      )
       SELECT
-        de.id::text,
-        de."documentId",
-        de."transcriptionId",
-        de.content,
-        de.metadata,
-        1 - (de.embedding <=> ${vectorStr}::vector) AS similarity
-      FROM document_embeddings de
-      WHERE de."projectId" = ${projectId}
-      ORDER BY de.embedding <=> ${vectorStr}::vector
+        id,
+        "documentId",
+        "transcriptionId",
+        content,
+        metadata,
+        rrf_score AS similarity,
+        match_type AS "matchType"
+      FROM rrf
+      ORDER BY rrf_score DESC
       LIMIT ${limit}
     `
   );
@@ -312,6 +385,7 @@ export async function searchEmbeddings(
     content: string;
     metadata: Record<string, unknown> | null;
     similarity: number;
+    matchType: string;
   }>;
 }
 

@@ -31,10 +31,17 @@ interface Props {
 
 // Similarity score → human-readable label + colour
 function similarityLabel(score: number): { label: string; className: string } {
-  if (score >= 0.85) return { label: "Excellent match", className: "text-green-400 bg-green-400/10" };
-  if (score >= 0.70) return { label: "Strong match",   className: "text-emerald-400 bg-emerald-400/10" };
-  if (score >= 0.55) return { label: "Good match",     className: "text-yellow-400 bg-yellow-400/10" };
+  if (score >= 0.025) return { label: "Excellent match", className: "text-green-400 bg-green-400/10" };
+  if (score >= 0.018) return { label: "Strong match",   className: "text-emerald-400 bg-emerald-400/10" };
+  if (score >= 0.012) return { label: "Good match",     className: "text-yellow-400 bg-yellow-400/10" };
   return                     { label: "Partial match", className: "text-orange-400 bg-orange-400/10" };
+}
+
+// Match type badge for hybrid/semantic/keyword
+function matchTypeBadge(matchType: string): { label: string; className: string } {
+  if (matchType === "hybrid")   return { label: "Hybrid",   className: "text-violet-400 bg-violet-400/10" };
+  if (matchType === "semantic") return { label: "Semantic",  className: "text-blue-400 bg-blue-400/10" };
+  return                               { label: "Keyword",   className: "text-amber-400 bg-amber-400/10" };
 }
 
 const EXAMPLE_QUERIES = [
@@ -130,9 +137,9 @@ export default function SemanticSearchPage({ projectId, project }: Props) {
             </div>
             <div>
               <h2 className="text-base font-semibold mb-1">Find documents by meaning</h2>
-              <p className="text-sm text-muted-foreground max-w-sm">
-                Unlike keyword search, semantic search understands context and meaning —
-                so you can describe what you're looking for in plain language.
+              <p className="text-xs text-muted-foreground max-w-sm">
+                Hybrid search combines semantic understanding with exact keyword matching.
+                Find documents by concept <em>and</em> by specific reference numbers, names, or terms.
               </p>
             </div>
 
@@ -190,6 +197,8 @@ export default function SemanticSearchPage({ projectId, project }: Props) {
             <p className="text-xs text-muted-foreground mb-4">
               Found <strong>{results.length}</strong> result{results.length !== 1 ? "s" : ""} for{" "}
               <span className="font-medium text-foreground">"{submitted}"</span>
+              {" — "}
+              <span className="text-violet-400">Hybrid search</span> (semantic + keyword)
             </p>
 
             {results.map((result, i) => {
@@ -213,15 +222,23 @@ export default function SemanticSearchPage({ projectId, project }: Props) {
                       <span className="text-sm font-medium truncate">{filename}</span>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
+                      {(() => {
+                        const mt = matchTypeBadge((result as unknown as { matchType: string }).matchType ?? "semantic");
+                        return (
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] px-1.5 py-0 border-0 ${mt.className}`}
+                          >
+                            {mt.label}
+                          </Badge>
+                        );
+                      })()}
                       <Badge
                         variant="outline"
                         className={`text-[10px] px-1.5 py-0 border-0 ${sim.className}`}
                       >
                         {sim.label}
                       </Badge>
-                      <span className="text-[10px] text-muted-foreground font-mono">
-                        {Math.round(result.similarity * 100)}%
-                      </span>
                     </div>
                   </div>
 

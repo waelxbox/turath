@@ -195,6 +195,8 @@ export const documentEmbeddings = pgTable("document_embeddings", {
   content: text("content").notNull(),           // The embedded text string
   metadata: jsonb("metadata"),                  // { sender, date, site, source, filename }
   embedding: vector("embedding", { dimensions: 3072 }),
+  // tsvector for full-text search (populated by trigger or on insert)
+  contentTsv: text("content_tsv"),              // stored as text, queried via raw SQL
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => [
   index("embeddings_projectId_idx").on(t.projectId),

@@ -159,5 +159,5 @@ export async function semanticSearch(
   limit = 5
 ) {
   const queryEmbedding = await getQueryEmbedding(query);
-  return searchEmbeddings(projectId, queryEmbedding, limit);
+  return searchEmbeddings(projectId, queryEmbedding, query, limit);
 }

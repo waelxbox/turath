@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import {
   CheckCircle2, Flag, ChevronLeft, ChevronRight, Loader2,
-  Eye, Filter, Zap, AlertCircle, ImageOff
+  Eye, Filter, Zap, AlertCircle, ImageOff, RotateCcw
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -207,6 +207,22 @@ function ReviewDocPanel({
           {currentDoc && <StatusBadge status={currentDoc.status} />}
         </div>
         <div className="flex items-center gap-2">
+          {/* Retranscribe — always visible when a doc is loaded */}
+          {currentDoc && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-muted-foreground hover:text-foreground"
+              onClick={handleTranscribe}
+              disabled={isTranscribing || isSaving}
+              title="Re-run AI transcription on this document (overwrites current output)"
+            >
+              {isTranscribing
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <RotateCcw className="w-3.5 h-3.5" />}
+              {isTranscribing ? "Transcribing…" : "Retranscribe"}
+            </Button>
+          )}
           {transcription && (
             <>
               <Button
@@ -214,7 +230,7 @@ function ReviewDocPanel({
                 size="sm"
                 className="gap-1.5 bg-transparent border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
                 onClick={() => handleSave("flagged")}
-                disabled={isSaving}
+                disabled={isSaving || isTranscribing}
               >
                 {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Flag className="w-3.5 h-3.5" />}
                 Flag
@@ -223,7 +239,7 @@ function ReviewDocPanel({
                 size="sm"
                 className="gap-1.5"
                 onClick={() => handleSave("reviewed")}
-                disabled={isSaving}
+                disabled={isSaving || isTranscribing}
               >
                 {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
                 Mark reviewed

@@ -140,4 +140,15 @@
 - [x] Add projects.reindexAll tRPC mutation to backfill embeddings for all reviewed documents (batches of 5)
 - [x] Add Re-index all button to Project Settings with loading state and success/info toasts
 - [x] 21 tests passing, zero TypeScript errors
+- [x] Push to GitHub
+
+## Features (Round 12)
+- [x] Add Retranscribe button to review page header (always visible, disabled during save/transcribe)
+- [x] Add content_tsv tsvector column to document_embeddings table in Supabase
+- [x] Create GIN index on content_tsv for fast FTS
+- [x] Update createEmbedding in db.ts to populate content_tsv on insert
+- [x] Upgrade searchEmbeddings in db.ts to Hybrid Search (pgvector + FTS + RRF fusion, k=60)
+- [x] Fix semanticSearch signature to pass queryText to searchEmbeddings
+- [x] Update SemanticSearchPage to show match type badge (Hybrid/Semantic/Keyword) and RRF-calibrated scores
+- [x] 21 tests passing, zero TypeScript errors
 - [ ] Push to GitHub
