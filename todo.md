@@ -152,3 +152,17 @@
 - [x] Update SemanticSearchPage to show match type badge (Hybrid/Semantic/Keyword) and RRF-calibrated scores
 - [x] 21 tests passing, zero TypeScript errors
 - [ ] Push to GitHub
+
+## Features (Round 13) — NER + Knowledge Graph
+- [x] Create entities table in Supabase (id, projectId, name, type enum, normalizedName for dedup)
+- [x] Create document_entities join table (id, documentId, entityId, projectId, contextSnippet)
+- [x] Update Drizzle schema with both new tables + entityTypeEnum
+- [x] Build nerService.ts — NER extraction via Gemini with strict JSON schema, Arabic diacritics normalization
+- [x] Wire NER extraction into saveReview mutation (fire-and-forget on reviewed docs)
+- [x] Add db helpers: getEntitiesByProject, getEntitiesByDocument, getEntityStats, getGraphData
+- [x] Add tRPC endpoints: entities.list, entities.byDocument, entities.stats, entities.graph, entities.reindexAll
+- [x] Install react-force-graph-2d for interactive knowledge graph
+- [x] Build KnowledgeGraphPage — force-directed graph, type filtering, zoom controls, detail panel with connections
+- [x] Add Knowledge Graph nav item to project workspace sidebar
+- [x] 21 tests passing, zero TypeScript errors
+- [ ] Push to GitHub

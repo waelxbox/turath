@@ -2,7 +2,7 @@ import { useParams, useLocation, Router, Route, Switch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { getLoginUrl } from "@/const";
-import { Loader2, BookOpen, Upload, Eye, Download, Settings, ArrowLeft, ChevronRight, MessageSquare, Search } from "lucide-react";
+import { Loader2, BookOpen, Upload, Eye, Download, Settings, ArrowLeft, ChevronRight, MessageSquare, Search, Network } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadPage from "./project/UploadPage";
 import ReviewPage from "./project/ReviewPage";
@@ -11,6 +11,7 @@ import ProjectSettings from "./project/ProjectSettings";
 import ProjectOverview from "./project/ProjectOverview";
 import SemanticChatPage from "./project/SemanticChatPage";
 import SemanticSearchPage from "./project/SemanticSearchPage";
+import KnowledgeGraphPage from "./project/KnowledgeGraphPage";
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview",    icon: BookOpen,      path: "/" },
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { id: "review",   label: "Review",      icon: Eye,           path: "/review" },
   { id: "search",   label: "Search",      icon: Search,        path: "/search" },
   { id: "chat",     label: "Ask Archive", icon: MessageSquare, path: "/chat" },
+  { id: "graph",    label: "Knowledge Graph", icon: Network,  path: "/graph" },
   { id: "export",   label: "Export",      icon: Download,      path: "/export" },
   { id: "settings", label: "Settings",    icon: Settings,      path: "/settings" },
 ];
@@ -159,6 +161,10 @@ function WorkspaceInner({
             {/* semantic chat */}
             <Route path="/chat">
               <SemanticChatPage projectId={projectId} project={project} />
+            </Route>
+            {/* knowledge graph */}
+            <Route path="/graph">
+              <KnowledgeGraphPage projectId={projectId} />
             </Route>
             {/* default: overview */}
             <Route>

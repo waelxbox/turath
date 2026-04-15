@@ -30,6 +30,7 @@ import { processDocument } from "./transcriptionEngine";
 import { storagePut } from "./storage";
 import { TRPCError } from "@trpc/server";
 import { embedTranscription, semanticSearch } from "./embeddingService";
+import { extractAndStoreEntities } from "./nerService";
 import { invokeLLM } from "./_core/llm";
 
 // ─── Auth Router ──────────────────────────────────────────────────────────────
@@ -643,6 +644,15 @@ const transcriptionsRouter = router({
         }).catch((err) => console.warn("[Embedding] Failed:", err));
       }
 
+      // Fire-and-forget: extract named entities (NER) via Gemini
+      const textForNER = Object.values(input.reviewedJson)
+        .filter((v): v is string => typeof v === "string")
+        .join("\n");
+      if (textForNER.length > 10) {
+        extractAndStoreEntities(input.projectId, input.documentId, textForNER)
+          .catch((err) => console.warn("[NER] Failed:", err));
+      }
+
       return { success: true };
     }),
 });
@@ -797,6 +807,88 @@ const jobsRouter = router({
     }),
 });
 
+// ─── Entities / Knowledge Graph Router ──────────────────────────────────────
+
+import {
+  getEntitiesByProject,
+  getEntitiesByDocument,
+  getEntityStats,
+  getGraphData,
+} from "./db";
+
+const entitiesRouter = router({
+  /** List all entities for a project, optionally filtered by type */
+  list: protectedProcedure
+    .input(z.object({
+      projectId: z.number(),
+      type: z.enum(["person", "location", "organization"]).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return getEntitiesByProject(input.projectId, input.type);
+    }),
+
+  /** Get entities linked to a specific document */
+  byDocument: protectedProcedure
+    .input(z.object({
+      projectId: z.number(),
+      documentId: z.number(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return getEntitiesByDocument(input.documentId);
+    }),
+
+  /** Get entity count stats for a project */
+  stats: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return getEntityStats(input.projectId);
+    }),
+
+  /** Get knowledge graph data (nodes + edges) for visualization */
+  graph: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+      return getGraphData(input.projectId);
+    }),
+
+  /** Re-extract entities for all reviewed documents (backfill) */
+  reindexAll: protectedProcedure
+    .input(z.object({ projectId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const project = await getProjectById(input.projectId, ctx.user.id);
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const reviewed = await getReviewedTranscriptions(input.projectId);
+      let processed = 0;
+
+      for (const row of reviewed) {
+        const json = row.transcription.reviewedJson as Record<string, unknown> | null;
+        if (!json) continue;
+        const text = Object.values(json)
+          .filter((v): v is string => typeof v === "string")
+          .join("\n");
+        if (text.length < 10) continue;
+
+        try {
+          await extractAndStoreEntities(input.projectId, row.transcription.documentId, text);
+          processed++;
+        } catch (err) {
+          console.warn(`[NER] Reindex failed for doc ${row.transcription.documentId}:`, err);
+        }
+      }
+
+      return { processed, total: reviewed.length };
+    }),
+});
+
 // ─── App Router ───────────────────────────────────────────────────────────────
 
 export const appRouter = router({
@@ -809,6 +901,7 @@ export const appRouter = router({
   export: exportRouter,
   jobs: jobsRouter,
   rag: ragRouter,
+  entities: entitiesRouter,
 });
 
 export type AppRouter = typeof appRouter;

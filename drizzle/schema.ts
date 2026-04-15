@@ -205,3 +205,45 @@ export const documentEmbeddings = pgTable("document_embeddings", {
 
 export type DocumentEmbedding = typeof documentEmbeddings.$inferSelect;
 export type InsertDocumentEmbedding = typeof documentEmbeddings.$inferInsert;
+
+// ─── Entity Type Enum ────────────────────────────────────────────────────────
+
+export const entityTypeEnum = pgEnum("entity_type", ["person", "location", "organization"]);
+
+// ─── Entities ────────────────────────────────────────────────────────────────
+// Named entities extracted via NER (Gemini). Deduplicated per project by name+type.
+
+export const entities = pgTable("entities", {
+  id: serial("id").primaryKey(),
+  projectId: integer("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 512 }).notNull(),
+  type: entityTypeEnum("type").notNull(),
+  normalizedName: varchar("normalizedName", { length: 512 }),  // lowercased / stripped for dedup
+  metadata: jsonb("metadata"),  // optional extra info (e.g., alternate spellings, notes)
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => [
+  index("entities_projectId_idx").on(t.projectId),
+  index("entities_name_type_idx").on(t.projectId, t.normalizedName, t.type),
+]);
+
+export type Entity = typeof entities.$inferSelect;
+export type InsertEntity = typeof entities.$inferInsert;
+
+// ─── Document–Entity Join Table ──────────────────────────────────────────────
+// Links entities to the documents they appear in, with optional context snippet.
+
+export const documentEntities = pgTable("document_entities", {
+  id: serial("id").primaryKey(),
+  documentId: integer("documentId").notNull().references(() => documents.id, { onDelete: "cascade" }),
+  entityId: integer("entityId").notNull().references(() => entities.id, { onDelete: "cascade" }),
+  projectId: integer("projectId").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  contextSnippet: text("contextSnippet"),  // sentence or phrase where entity was found
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => [
+  index("docent_documentId_idx").on(t.documentId),
+  index("docent_entityId_idx").on(t.entityId),
+  index("docent_projectId_idx").on(t.projectId),
+]);
+
+export type DocumentEntity = typeof documentEntities.$inferSelect;
+export type InsertDocumentEntity = typeof documentEntities.$inferInsert;

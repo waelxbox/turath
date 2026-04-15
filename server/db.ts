@@ -9,6 +9,8 @@ import {
   transcriptions, InsertTranscription,
   jobs, InsertJob,
   documentEmbeddings, InsertDocumentEmbedding,
+  entities, Entity,
+  documentEntities, DocumentEntity,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -421,4 +423,121 @@ export async function getReviewedDocsWithoutEmbeddings(projectId: number) {
     );
 
   return results;
+}
+
+
+// ─── Entity Helpers ──────────────────────────────────────────────────────────
+
+/** Get all entities for a project, optionally filtered by type */
+export async function getEntitiesByProject(
+  projectId: number,
+  type?: "person" | "location" | "organization",
+) {
+  const db = (await getDb())!;
+  const conditions = [eq(entities.projectId, projectId)];
+  if (type) conditions.push(eq(entities.type, type));
+
+  return db
+    .select()
+    .from(entities)
+    .where(and(...conditions))
+    .orderBy(entities.name);
+}
+
+/** Get entities linked to a specific document */
+export async function getEntitiesByDocument(documentId: number) {
+  const db = (await getDb())!;
+  return db
+    .select({
+      id: entities.id,
+      name: entities.name,
+      type: entities.type,
+      contextSnippet: documentEntities.contextSnippet,
+    })
+    .from(documentEntities)
+    .innerJoin(entities, eq(entities.id, documentEntities.entityId))
+    .where(eq(documentEntities.documentId, documentId))
+    .orderBy(entities.type, entities.name);
+}
+
+/** Get entity counts by type for a project */
+export async function getEntityStats(projectId: number) {
+  const db = (await getDb())!;
+  const results = await db
+    .select({
+      type: entities.type,
+      count: count(entities.id),
+    })
+    .from(entities)
+    .where(eq(entities.projectId, projectId))
+    .groupBy(entities.type);
+
+  return {
+    persons: results.find((r) => r.type === "person")?.count ?? 0,
+    locations: results.find((r) => r.type === "location")?.count ?? 0,
+    organizations: results.find((r) => r.type === "organization")?.count ?? 0,
+    total: results.reduce((sum, r) => sum + r.count, 0),
+  };
+}
+
+/** Get knowledge graph data: nodes (entities + documents) and edges (links) */
+export async function getGraphData(projectId: number) {
+  const db = (await getDb())!;
+
+  // Get all entities for this project
+  const allEntities = await db
+    .select({
+      id: entities.id,
+      name: entities.name,
+      type: entities.type,
+    })
+    .from(entities)
+    .where(eq(entities.projectId, projectId));
+
+  // Get all document-entity links for this project
+  const links = await db
+    .select({
+      documentId: documentEntities.documentId,
+      entityId: documentEntities.entityId,
+      contextSnippet: documentEntities.contextSnippet,
+    })
+    .from(documentEntities)
+    .where(eq(documentEntities.projectId, projectId));
+
+  // Get document names for linked documents
+  const linkedDocIds = Array.from(new Set(links.map((l) => l.documentId)));
+  let docNodes: { id: number; filename: string }[] = [];
+  if (linkedDocIds.length > 0) {
+    docNodes = await db
+      .select({ id: documents.id, filename: documents.filename })
+      .from(documents)
+      .where(
+        and(
+          eq(documents.projectId, projectId),
+          sql`${documents.id} IN ${linkedDocIds}`,
+        ),
+      );
+  }
+
+  // Build graph structure
+  const nodes = [
+    ...docNodes.map((d) => ({
+      id: `doc-${d.id}`,
+      label: d.filename,
+      type: "document" as const,
+    })),
+    ...allEntities.map((e) => ({
+      id: `ent-${e.id}`,
+      label: e.name,
+      type: e.type,
+    })),
+  ];
+
+  const edges = links.map((l) => ({
+    source: `doc-${l.documentId}`,
+    target: `ent-${l.entityId}`,
+    context: l.contextSnippet,
+  }));
+
+  return { nodes, edges };
 }
